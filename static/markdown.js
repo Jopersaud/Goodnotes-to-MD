@@ -39,6 +39,70 @@
     return { meta: meta, body: rest };
   }
 
+  // Math spans are pulled out before markdown runs and put back afterwards.
+  // Without this, `\begin{bmatrix}a & b \\ c & d\end{bmatrix}` loses its `\\`
+  // row breaks and `x_1 * y_1` turns into emphasis. Collected per render pass.
+  let mathSpans = [];
+
+  // Apply the math scan everywhere except inside fenced code, where a dollar
+  // sign is just a dollar sign.
+  function stashMathOutsideFences(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let buffer = [];
+    let inFence = false;
+
+    function flush() {
+      if (buffer.length) {
+        out.push(stashMath(buffer.join('\n')));
+        buffer = [];
+      }
+    }
+
+    lines.forEach(function (line) {
+      if (/^\s*```/.test(line)) {
+        if (!inFence) flush();
+        inFence = !inFence;
+        out.push(line);
+        return;
+      }
+      if (inFence) out.push(line);
+      else buffer.push(line);
+    });
+    flush();
+    return out.join('\n');
+  }
+
+  function stashMath(text) {
+    // $$...$$ and \[...\] are display; $...$ and \(...\) are inline. A bare
+    // dollar amount ("$5 and $10") must not start a math span, so inline $...$
+    // requires a non-space character just inside each delimiter.
+    return text
+      .replace(/\$\$([\s\S]+?)\$\$/g, function (_m, tex) { return keepMath(tex, true); })
+      .replace(/\\\[([\s\S]+?)\\\]/g, function (_m, tex) { return keepMath(tex, true); })
+      .replace(/\\\(([\s\S]+?)\\\)/g, function (_m, tex) { return keepMath(tex, false); })
+      .replace(/\$(?!\s)((?:[^$\\\n]|\\.)+?)(?<!\s)\$/g, function (_m, tex) {
+        return keepMath(tex, false);
+      });
+  }
+
+  function keepMath(tex, display) {
+    mathSpans.push({ tex: tex, display: display });
+    return '\u0000MATH' + (mathSpans.length - 1) + '\u0000';
+  }
+
+  function restoreMath(html) {
+    return html.replace(/\u0000MATH(\d+)\u0000/g, function (_m, index) {
+      const span = mathSpans[Number(index)];
+      if (!span) return '';
+      // KaTeX renders these in place after the HTML lands in the document;
+      // if it is unavailable the raw TeX still shows, which beats nothing.
+      const tag = span.display ? 'div' : 'span';
+      const cls = span.display ? 'math math-display' : 'math math-inline';
+      return '<' + tag + ' class="' + cls + '">' + escapeHtml(span.tex) + '</' + tag + '>';
+    });
+  }
+
   function renderInline(text, resolveImage) {
     const codes = [];
     let out = escapeHtml(text);
@@ -141,7 +205,13 @@
     options = options || {};
     const resolveImage = options.resolveImage;
     const split = splitFrontMatter(markdown || '');
-    const lines = split.body.split('\n');
+
+    // Only the outermost call stashes and restores: nested calls (blockquotes)
+    // receive text whose math is already tokenised, and share the same table.
+    const outermost = !options._nested;
+    if (outermost) mathSpans = [];
+    const body = outermost ? stashMathOutsideFences(split.body) : split.body;
+    const lines = body.split('\n');
     let html = '';
     let index = 0;
 
@@ -187,7 +257,9 @@
           buffer.push(lines[index].replace(/^\s*>\s?/, ''));
           index++;
         }
-        html += '<blockquote>' + render(buffer.join('\n'), options).html + '</blockquote>';
+        html += '<blockquote>'
+          + render(buffer.join('\n'), Object.assign({}, options, { _nested: true })).html
+          + '</blockquote>';
         continue;
       }
 
@@ -235,10 +307,15 @@
         index++;
       }
       const text = renderInline(paragraph.join(' '), resolveImage);
-      // A lone image reads better without a paragraph wrapper.
-      html += /^<img[^>]*>$/.test(text) ? text : '<p>' + text + '</p>';
+      // A lone image, or a display equation on its own, reads better without a
+      // paragraph wrapper - and a <div> inside a <p> is invalid HTML anyway.
+      const loneMath = text.match(/^\u0000MATH(\d+)\u0000$/);
+      const bare = /^<img[^>]*>$/.test(text)
+        || (loneMath && mathSpans[Number(loneMath[1])] && mathSpans[Number(loneMath[1])].display);
+      html += bare ? text : '<p>' + text + '</p>';
     }
 
+    if (outermost) html = restoreMath(html);
     return { html: html, meta: split.meta };
   }
 

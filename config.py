@@ -68,5 +68,11 @@ MAX_PDF_PAGES = int(os.environ.get("GNMD_MAX_PDF_PAGES", "200"))
 # Long edge of the thumbnails shown in the page strip.
 THUMB_EDGE_PX = int(os.environ.get("GNMD_THUMB_EDGE", "320"))
 
+# Optional one-click PDF export via headless Chromium. Printing from the
+# browser needs none of this. CHROMIUM_PATH is only needed when Playwright
+# cannot find a browser itself.
+CHROMIUM_PATH = os.environ.get("GNMD_CHROMIUM_PATH", "")
+PDF_TIMEOUT_MS = int(os.environ.get("GNMD_PDF_TIMEOUT_MS", "30000"))
+
 # Upload sessions older than this (in hours) are cleaned up automatically.
 UPLOAD_TTL_HOURS = int(os.environ.get("GNMD_UPLOAD_TTL_HOURS", "24"))
