@@ -1,0 +1,22 @@
+# Generated study notes and their screenshots stay local.
+/notes/*
+!/notes/.gitkeep
+/assets/*
+!/assets/.gitkeep
+/uploads/*
+!/uploads/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local export bundle, not part of the project.
+/goodnotes-md.zip

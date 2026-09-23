@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoodNotes to Markdown</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b1542c'/%3E%3Cpath d='M9 22.5c3-9 5.5-13 7-13s.5 6 1.5 8 2.5 1 5.5-3' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>GoodNotes &rarr; Markdown</h1>
+  <span class="sub">handwritten pages, transcribed by Claude Code</span>
+  <nav>
+    <button id="tab-convert" class="active">Convert</button>
+    <button id="tab-library">Library</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ------------------------------ Convert ------------------------------ -->
+  <section id="view-convert" class="view">
+
+    <div class="card">
+      <h2>Pages</h2>
+      <div id="dropzone">
+        <strong>Drop the screenshots for one note here</strong>
+        one note may span several pages &mdash; click to pick files or a folder
+      </div>
+      <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+      <div id="thumbs" class="thumbs"></div>
+      <div id="page-warning" class="banner warn" hidden></div>
+
+      <div class="controls">
+        <label class="field">
+          Model
+          <select id="model"></select>
+        </label>
+        <span id="page-count" class="detail" style="color:var(--muted);font-size:13px"></span>
+        <span class="spacer"></span>
+        <button id="clear" class="ghost" disabled>Clear</button>
+        <button id="convert" class="primary" disabled>Convert</button>
+      </div>
+
+      <div id="env-warning" class="banner warn" hidden></div>
+      <div id="progress" hidden></div>
+      <div id="convert-error" class="banner error" hidden></div>
+      <div id="save-status" class="banner ok" hidden></div>
+    </div>
+
+    <div id="result" class="card" hidden>
+      <h2>Preview</h2>
+      <div class="controls" style="margin-top:0">
+        <label class="field" style="flex:2 1 260px">
+          Title
+          <input id="out-title" type="text">
+        </label>
+        <label class="field" style="flex:1 1 150px">
+          Subject
+          <input id="out-subject" type="text">
+        </label>
+        <label class="field">
+          Date
+          <input id="out-date" type="date">
+        </label>
+      </div>
+      <div class="controls">
+        <span id="result-summary" style="color:var(--muted);font-size:12.5px"></span>
+        <span class="spacer"></span>
+        <button id="copy" class="ghost">Copy markdown</button>
+        <button id="regenerate" class="ghost">Regenerate</button>
+        <button id="save" class="primary">Save note</button>
+      </div>
+
+      <div class="split" style="margin-top:16px">
+        <div>
+          <h2 class="label">Markdown</h2>
+          <textarea id="out-markdown" spellcheck="false"></textarea>
+        </div>
+        <div>
+          <h2 class="label">Rendered</h2>
+          <div id="out-render" class="markdown"></div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ------------------------------ Library ------------------------------ -->
+  <section id="view-library" class="view" hidden>
+
+    <div id="library-list" class="card">
+      <h2>Converted notes</h2>
+      <div id="notes-list" class="notes-list"></div>
+      <div id="notes-empty" class="empty" hidden>
+        Nothing here yet. Convert a note and save it.
+      </div>
+      <div id="notes-dir" class="pathline"></div>
+    </div>
+
+    <div id="library-detail" class="card" hidden>
+      <div class="controls" style="margin-top:0">
+        <button id="back" class="ghost">&larr; All notes</button>
+        <span class="spacer"></span>
+        <button id="note-edit" class="ghost">Edit</button>
+        <button id="note-save" class="primary" hidden>Save changes</button>
+        <button id="note-cancel" class="ghost" hidden>Cancel</button>
+        <button id="note-delete" class="danger">Delete</button>
+      </div>
+      <div id="note-status" class="banner ok" hidden></div>
+      <div id="note-path" class="pathline"></div>
+      <textarea id="note-editor" hidden spellcheck="false"></textarea>
+      <div id="note-render" class="markdown" style="margin-top:14px"></div>
+    </div>
+
+  </section>
+
+</main>
+
+<script src="/static/markdown.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
