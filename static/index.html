@@ -26,10 +26,14 @@
     <div class="card">
       <h2>Pages</h2>
       <div id="dropzone">
-        <strong>Drop the screenshots for one note here</strong>
-        one note may span several pages &mdash; click to pick files or a folder
+        <strong>Drop one note's PDF or screenshots here</strong>
+        a GoodNotes PDF export is split into pages automatically &mdash;
+        click to pick files instead
       </div>
-      <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+      <input id="file-input" type="file"
+             accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/gif"
+             multiple hidden>
+      <div id="prepare-status" class="banner" hidden></div>
       <div id="thumbs" class="thumbs"></div>
       <div id="page-warning" class="banner warn" hidden></div>
 

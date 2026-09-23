@@ -7,10 +7,12 @@
 
   const state = {
     config: null,
-    pages: [],          // { file, url, name }
+    sessionId: null,    // server-side upload session holding the prepared pages
+    pages: [],          // { id, label, url, thumb, source } as prepared by the server
     result: null,       // last conversion payload
     previewMap: {},     // "page1.png" -> upload URL
     dragIndex: null,
+    preparing: false,
     converting: false,
     openNote: null,
     editing: false,
@@ -110,45 +112,82 @@
 
   /* ------------------------------ pages -------------------------------- */
 
-  function addFiles(fileList) {
+  // Files are uploaded as soon as they are dropped: the server stores images
+  // as-is and rasterises PDFs into one image per page, then hands back real
+  // page thumbnails. That is what lets a PDF be previewed and reordered here
+  // without a PDF renderer in the browser.
+  async function addFiles(fileList) {
     const allowed = (state.config && state.config.allowed_suffixes) || ['.png', '.jpg'];
+    const accepted = [];
     const rejected = [];
     Array.prototype.forEach.call(fileList, function (file) {
       const dot = file.name.lastIndexOf('.');
       const suffix = dot === -1 ? '' : file.name.slice(dot).toLowerCase();
-      if (allowed.indexOf(suffix) === -1) { rejected.push(file.name); return; }
-      state.pages.push({ file: file, url: URL.createObjectURL(file), name: file.name });
+      if (allowed.indexOf(suffix) === -1) rejected.push(file.name);
+      else accepted.push(file);
     });
-    // GoodNotes exports as IMG_1234.PNG, so name order is usually page order.
-    state.pages.sort(function (a, b) {
-      return a.name.localeCompare(b.name, undefined, { numeric: true });
-    });
+
     if (rejected.length) {
       banner(
         $('convert-error'),
-        'Skipped ' + rejected.length + ' file(s) that are not supported images.',
+        'Skipped ' + rejected.length + ' file(s) of an unsupported type.',
         rejected.join('\n') + '\n\nSupported: ' + allowed.join(', ')
       );
     }
-    renderThumbs();
+    if (!accepted.length) return;
+
+    state.preparing = true;
+    updateControls();
+    const hasPdf = accepted.some(function (file) { return /\.pdf$/i.test(file.name); });
+    banner($('prepare-status'), hasPdf ? 'Reading PDF pages…' : 'Preparing pages…');
+
+    const form = new FormData();
+    accepted.forEach(function (file) { form.append('files', file, file.name); });
+    if (state.sessionId) form.append('session_id', state.sessionId);
+
+    try {
+      const body = await api('/api/pages', { method: 'POST', body: form });
+      state.sessionId = body.session_id;
+      (body.pages || []).forEach(function (page) { state.pages.push(page); });
+      banner($('prepare-status'), null);
+    } catch (error) {
+      banner($('prepare-status'), null);
+      banner($('convert-error'), 'Could not prepare those pages.', String(error.message || error));
+    } finally {
+      state.preparing = false;
+      renderThumbs();
+    }
   }
 
   function removePage(index) {
-    URL.revokeObjectURL(state.pages[index].url);
     state.pages.splice(index, 1);
     renderThumbs();
   }
 
-  function clearPages() {
-    state.pages.forEach(function (page) { URL.revokeObjectURL(page.url); });
+  async function clearPages(discard) {
+    const sessionId = state.sessionId;
     state.pages = [];
+    state.sessionId = null;
     state.result = null;
     state.previewMap = {};
     show($('result'), false);
     show($('progress'), false);
     banner($('convert-error'), null);
+    banner($('prepare-status'), null);
     renderThumbs();
     $('file-input').value = '';
+    if (discard && sessionId) {
+      try {
+        await api('/api/pages/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+      } catch (error) { /* the session expires on its own anyway */ }
+    }
+  }
+
+  function updateControls() {
+    const busy = state.converting || state.preparing;
+    $('convert').disabled = busy || state.pages.length === 0;
+    $('clear').disabled = busy || state.pages.length === 0;
+    $('regenerate').disabled = busy || state.pages.length === 0;
   }
 
   function renderThumbs() {
@@ -161,8 +200,9 @@
       card.dataset.index = String(index);
 
       const img = document.createElement('img');
-      img.src = page.url;
-      img.alt = page.name;
+      img.src = page.thumb;
+      img.alt = page.label;
+      img.loading = 'lazy';
       card.appendChild(img);
 
       const meta = document.createElement('div');
@@ -172,8 +212,8 @@
       pageLabel.textContent = 'p' + (index + 1);
       const name = document.createElement('span');
       name.className = 'name';
-      name.textContent = page.name;
-      name.title = page.name;
+      name.textContent = page.label;
+      name.title = page.label + (page.source === 'pdf' ? ' (from PDF)' : '');
       const remove = document.createElement('button');
       remove.className = 'remove';
       remove.textContent = '×';
@@ -218,11 +258,12 @@
     });
 
     const count = state.pages.length;
-    $('page-count').textContent = count
-      ? count + (count === 1 ? ' page' : ' pages') + ' — drag to reorder'
-      : '';
-    $('convert').disabled = count === 0 || state.converting;
-    $('clear').disabled = count === 0 || state.converting;
+    const fromPdf = state.pages.filter(function (p) { return p.source === 'pdf'; }).length;
+    let label = count ? count + (count === 1 ? ' page' : ' pages') : '';
+    if (fromPdf) label += ' (' + fromPdf + ' from PDF)';
+    if (count > 1) label += ' — drag to reorder';
+    $('page-count').textContent = label;
+    updateControls();
 
     const threshold = (state.config && state.config.page_warn_threshold) || 15;
     if (count > threshold) {
@@ -255,25 +296,27 @@
   }
 
   async function convert() {
-    if (state.converting || !state.pages.length) return;
+    if (state.converting || state.preparing || !state.pages.length) return;
     state.converting = true;
-    $('convert').disabled = true;
-    $('clear').disabled = true;
-    $('regenerate').disabled = true;
+    updateControls();
     banner($('convert-error'), null);
     banner($('save-status'), null);
     show($('result'), false);
     $('progress').innerHTML = '';
-    logProgress('status', 'Uploading ' + state.pages.length + ' page(s)…');
+    logProgress('status', 'Starting…');
 
-    const form = new FormData();
-    state.pages.forEach(function (page) { form.append('files', page.file, page.name); });
-    const model = encodeURIComponent($('model').value || '');
+    // The pages are already on the server, so a Regenerate costs no re-upload.
+    const payload = {
+      session_id: state.sessionId,
+      order: state.pages.map(function (page) { return page.id; }),
+      model: $('model').value || null,
+    };
 
     try {
-      const response = await fetch('/api/convert?model=' + model, {
+      const response = await fetch('/api/convert', {
         method: 'POST',
-        body: form,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
       if (!response.ok || !response.body) {
         let detail = response.statusText;
@@ -288,7 +331,6 @@
       banner($('convert-error'), 'Conversion failed.', String(error.message || error));
     } finally {
       state.converting = false;
-      $('regenerate').disabled = false;
       renderThumbs();
     }
   }
@@ -400,6 +442,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: state.result.session_id,
+          order: state.result.order,
           markdown: $('out-markdown').value,
           title: $('out-title').value.trim() || 'Untitled note',
           subject: $('out-subject').value.trim(),
@@ -412,7 +455,7 @@
         info.path + '\nScreenshots: ' + (state.config.assets_dir + '/' + info.slug)
       );
       state.result = null;
-      clearPages();
+      clearPages(false);              // saving already consumed the session
       show($('save-status'), true);   // lives outside the preview card
       loadNotes();
     } catch (error) {
@@ -601,7 +644,7 @@
     window.addEventListener('drop', function (event) { event.preventDefault(); });
 
     $('convert').addEventListener('click', convert);
-    $('clear').addEventListener('click', clearPages);
+    $('clear').addEventListener('click', function () { clearPages(true); });
     $('regenerate').addEventListener('click', convert);
     $('save').addEventListener('click', saveNote);
     $('copy').addEventListener('click', async function () {
