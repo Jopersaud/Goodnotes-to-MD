@@ -19,7 +19,7 @@ from datetime import date as date_cls
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -27,24 +27,20 @@ from pydantic import BaseModel, Field
 import claude_client
 import config
 import note_store
+import page_prep
 from claude_client import ConversionError, ProgressEvent
+from page_prep import PagePrepError
 
 app = FastAPI(title="GoodNotes to Markdown")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SESSION_RE = re.compile(r"^[0-9a-f]{32}$")
+_PAGE_ID_RE = re.compile(r"^p\d{4}\.[a-z]{3,4}$")
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-
-def _safe_filename(name: str) -> str:
-    base = Path(name or "").name
-    cleaned = _SAFE_NAME_RE.sub("_", base).strip("._") or "page"
-    return cleaned[:80]
 
 
 def _session_dir(session_id: str) -> Path:
@@ -69,49 +65,35 @@ def _prune_old_uploads() -> None:
             continue
 
 
-async def _store_uploads(files: list[UploadFile]) -> tuple[Path, list[str]]:
-    """Write uploads into a fresh session folder, preserving submitted order."""
-    if not files:
-        raise HTTPException(status_code=400, detail="No images were uploaded.")
+def _natural_key(name: str) -> list[Any]:
+    """Sort key where IMG_9.PNG comes before IMG_10.PNG."""
+    parts = re.split(r"(\d+)", Path(name).name.lower())
+    return [int(part) if part.isdigit() else part for part in parts]
 
-    session_id = uuid.uuid4().hex
-    session_dir = config.UPLOADS_DIR / session_id
-    session_dir.mkdir(parents=True)
 
-    stored: list[str] = []
-    for index, upload in enumerate(files, start=1):
-        suffix = Path(upload.filename or "").suffix.lower()
-        if suffix not in config.ALLOWED_SUFFIXES:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            allowed = ", ".join(sorted(config.ALLOWED_SUFFIXES))
+def _next_page_index(session_dir: Path) -> int:
+    """One past the highest page number already prepared in this session."""
+    existing = [int(path.stem[1:]) for path in session_dir.glob("p[0-9][0-9][0-9][0-9].*")]
+    return max(existing, default=0) + 1
+
+
+def _resolve_order(session_dir: Path, order: list[str]) -> list[str]:
+    """Validate page ids the UI sent back and return them in that order."""
+    if not order:
+        raise HTTPException(status_code=400, detail="No pages were selected.")
+    resolved: list[str] = []
+    for page_id in order:
+        name = Path(page_id or "").name
+        if not _PAGE_ID_RE.match(name) or not (session_dir / name).is_file():
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"{upload.filename!r} is not a supported image ({allowed}). "
-                    "Export from GoodNotes as PNG or JPEG."
-                ),
+                detail="That page is no longer in the upload session - re-add "
+                "the files and try again.",
             )
-        data = await upload.read()
-        if not data:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            raise HTTPException(
-                status_code=400, detail=f"{upload.filename!r} was empty."
-            )
-        if len(data) > config.MAX_IMAGE_BYTES:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            limit_mb = config.MAX_IMAGE_BYTES // (1024 * 1024)
-            raise HTTPException(
-                status_code=413,
-                detail=f"{upload.filename!r} is larger than {limit_mb} MB.",
-            )
-        name = f"{index:02d}_{_safe_filename(upload.filename or 'page')}"
-        (session_dir / name).write_bytes(data)
-        stored.append(name)
-
-    (session_dir / "meta.json").write_text(
-        json.dumps({"originals": stored}, indent=2), encoding="utf-8"
-    )
-    return session_dir, stored
+        if name in resolved:
+            raise HTTPException(status_code=400, detail="A page was listed twice.")
+        resolved.append(name)
+    return resolved
 
 
 def _sse(event: str, payload: dict[str, Any]) -> str:
@@ -129,33 +111,93 @@ def get_config() -> dict[str, Any]:
         "models": config.AVAILABLE_MODELS,
         "default_model": config.DEFAULT_MODEL,
         "page_warn_threshold": config.PAGE_WARN_THRESHOLD,
-        "allowed_suffixes": sorted(config.ALLOWED_SUFFIXES),
+        "allowed_suffixes": sorted(config.ALLOWED_SUFFIXES | config.PDF_SUFFIXES),
+        "pdf_supported": page_prep.pdfium is not None,
         "notes_dir": str(config.NOTES_DIR),
         "assets_dir": str(config.ASSETS_DIR),
         "env_notices": claude_client.env_notices(),
     }
 
 
-@app.post("/api/convert")
-async def convert(files: list[UploadFile], model: str | None = None) -> StreamingResponse:
-    """Upload pages and stream conversion progress as server-sent events.
+@app.post("/api/pages")
+async def prepare_pages(
+    files: list[UploadFile], session_id: str | None = Form(default=None)
+) -> dict[str, Any]:
+    """Upload files and expand them into page images ready to convert.
 
-    The last event is either `done` (with the assembled markdown and the upload
-    session id needed to save) or `error` (with a message for the UI).
+    Images are stored as-is; PDFs are rasterised one image per page. Passing an
+    existing `session_id` appends to that session, so pages can be added in
+    several drops. Returns the pages added by this call, in page order.
     """
-    _prune_old_uploads()
-    session_dir, originals = await _store_uploads(files)
-    chosen_model = (model or config.DEFAULT_MODEL).strip() or config.DEFAULT_MODEL
-    image_paths = [session_dir / name for name in originals]
-    page_files = note_store.page_filenames(originals)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded.")
+
+    if session_id:
+        session_dir = _session_dir(session_id)
+    else:
+        _prune_old_uploads()
+        session_dir = config.UPLOADS_DIR / uuid.uuid4().hex
+        session_dir.mkdir(parents=True)
+
+    # Loose screenshots arrive in whatever order the OS handed them over;
+    # GoodNotes names them sequentially, so sort this batch by name. A PDF
+    # carries its own page order and is expanded in place.
+    uploads = sorted(files, key=lambda f: _natural_key(f.filename or ""))
+
+    prepared: list[page_prep.PreparedPage] = []
+    index = _next_page_index(session_dir)
+    for upload in uploads:
+        data = await upload.read()
+        try:
+            pages = page_prep.prepare_file(
+                data, upload.filename or "page", session_dir, index
+            )
+        except PagePrepError as exc:
+            if not session_id and not prepared:
+                shutil.rmtree(session_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        prepared.extend(pages)
+        index += len(pages)
+
+    return {
+        "session_id": session_dir.name,
+        "pages": [page.as_dict(session_dir.name) for page in prepared],
+    }
+
+
+@app.delete("/api/pages/{session_id}")
+def discard_session(session_id: str) -> dict[str, Any]:
+    """Throw away an upload session the user cleared without converting."""
+    session_dir = _session_dir(session_id)
+    shutil.rmtree(session_dir, ignore_errors=True)
+    return {"discarded": session_id}
+
+
+class ConvertRequest(BaseModel):
+    session_id: str
+    order: list[str]
+    model: str | None = None
+
+
+@app.post("/api/convert")
+async def convert(request: ConvertRequest) -> StreamingResponse:
+    """Convert prepared pages, streaming progress as server-sent events.
+
+    The last event is either `done` (with the assembled markdown and the page
+    order needed to save) or `error` (with a message for the UI).
+    """
+    session_dir = _session_dir(request.session_id)
+    order = _resolve_order(session_dir, request.order)
+    chosen_model = (
+        request.model or config.DEFAULT_MODEL
+    ).strip() or config.DEFAULT_MODEL
+    image_paths = [session_dir / name for name in order]
+    page_files = note_store.page_filenames(order)
 
     async def stream() -> AsyncIterator[str]:
         yield _sse(
             "progress",
-            {
-                "kind": "status",
-                "message": f"Uploaded {len(originals)} page(s).",
-            },
+            {"kind": "status", "message": f"Sending {len(order)} page(s) to Claude."},
         )
         payload: dict[str, Any] | None = None
         try:
@@ -204,6 +246,7 @@ async def convert(files: list[UploadFile], model: str | None = None) -> Streamin
             "done",
             {
                 "session_id": session_dir.name,
+                "order": order,
                 "slug_preview": slug,
                 "model": chosen_model,
                 "title": payload["title"],
@@ -220,7 +263,7 @@ async def convert(files: list[UploadFile], model: str | None = None) -> Streamin
                         "asset_name": page_files[index - 1],
                         "url": f"/api/uploads/{session_dir.name}/{name}",
                     }
-                    for index, name in enumerate(originals, start=1)
+                    for index, name in enumerate(order, start=1)
                 ],
             },
         )
@@ -244,6 +287,7 @@ def get_upload(session_id: str, filename: str) -> FileResponse:
 
 class SaveRequest(BaseModel):
     session_id: str
+    order: list[str]
     markdown: str
     title: str = Field(default="Untitled note")
     subject: str = ""
@@ -253,14 +297,7 @@ class SaveRequest(BaseModel):
 @app.post("/api/notes")
 def save_note(request: SaveRequest) -> dict[str, Any]:
     session_dir = _session_dir(request.session_id)
-    try:
-        meta = json.loads((session_dir / "meta.json").read_text(encoding="utf-8"))
-        originals: list[str] = list(meta["originals"])
-    except (OSError, ValueError, KeyError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="This upload session is incomplete - convert the pages again.",
-        ) from exc
+    originals = _resolve_order(session_dir, request.order)
 
     title = request.title.strip() or "Untitled note"
     slug = note_store.unique_slug(title)

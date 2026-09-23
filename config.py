@@ -46,11 +46,24 @@ CONVERT_TIMEOUT = int(os.environ.get("GNMD_TIMEOUT", "900"))
 PAGE_WARN_THRESHOLD = int(os.environ.get("GNMD_PAGE_WARN", "15"))
 
 # Image formats Claude Code's Read tool handles. HEIC is deliberately absent:
-# export from GoodNotes as PNG or JPEG instead.
+# export from GoodNotes as PNG, JPEG, or PDF instead.
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-# Per-file upload ceiling, in bytes.
-MAX_IMAGE_BYTES = int(os.environ.get("GNMD_MAX_IMAGE_BYTES", str(30 * 1024 * 1024)))
+# GoodNotes' own export format. PDFs are rasterised into page images on upload.
+PDF_SUFFIXES = {".pdf"}
+
+# Per-file upload ceiling, in bytes. A multi-page PDF is one file, so this is
+# more generous than a single screenshot needs.
+MAX_UPLOAD_BYTES = int(os.environ.get("GNMD_MAX_UPLOAD_BYTES", str(80 * 1024 * 1024)))
+
+# PDF rasterisation. The DPI is what handwriting is rendered at; the long-edge
+# cap stops an unusually large page from producing an enormous PNG.
+PDF_RENDER_DPI = int(os.environ.get("GNMD_PDF_DPI", "150"))
+MAX_PAGE_EDGE_PX = int(os.environ.get("GNMD_MAX_PAGE_EDGE", "2200"))
+MAX_PDF_PAGES = int(os.environ.get("GNMD_MAX_PDF_PAGES", "200"))
+
+# Long edge of the thumbnails shown in the page strip.
+THUMB_EDGE_PX = int(os.environ.get("GNMD_THUMB_EDGE", "320"))
 
 # Upload sessions older than this (in hours) are cleaned up automatically.
 UPLOAD_TTL_HOURS = int(os.environ.get("GNMD_UPLOAD_TTL_HOURS", "24"))
