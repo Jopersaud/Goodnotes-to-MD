@@ -114,8 +114,14 @@ Rules for "markdown_body":
 Do not include a top-level `#` heading and do not include a "Summary" or \
 "Practice Exercises" heading; those are added separately.
 - Transcribe the content faithfully. Keep the note's own lists, arrows, \
-equations, and emphasis. Use LaTeX-free plain notation unless the note itself \
-uses mathematical notation, in which case inline `$...$` is fine.
+equations, and emphasis.
+- Mathematical notation is rendered with KaTeX, so write it as LaTeX: `$...$` \
+for maths inside a sentence, and `$$...$$` on its own lines for anything \
+displayed, which includes every matrix, determinant, integral, summation, \
+system of equations, and multi-line derivation. Use real LaTeX environments \
+(`\\begin{{bmatrix}}`, `\\begin{{cases}}`, `\\frac`, `\\int`, `\\sum`) rather \
+than approximating them with text. Prose stays plain: do not wrap ordinary \
+words, units, or bare numbers in `$`.
 - Where you are not confident of a transcription, write the span as \
 `[unclear: best guess text]` instead of silently guessing. Do this for blurry, \
 cut-off, faded, or illegible handwriting.

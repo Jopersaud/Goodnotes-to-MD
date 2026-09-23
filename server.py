@@ -10,17 +10,24 @@ an unset shell is one less thing to get wrong.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import shutil
 import time
 import uuid
+import zipfile
 from datetime import date as date_cls
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,6 +35,7 @@ import claude_client
 import config
 import note_store
 import page_prep
+import pdf_export
 from claude_client import ConversionError, ProgressEvent
 from page_prep import PagePrepError
 
@@ -113,6 +121,7 @@ def get_config() -> dict[str, Any]:
         "page_warn_threshold": config.PAGE_WARN_THRESHOLD,
         "allowed_suffixes": sorted(config.ALLOWED_SUFFIXES | config.PDF_SUFFIXES),
         "pdf_supported": page_prep.pdfium is not None,
+        "pdf_export": pdf_export.available(),
         "notes_dir": str(config.NOTES_DIR),
         "assets_dir": str(config.ASSETS_DIR),
         "env_notices": claude_client.env_notices(),
@@ -362,6 +371,68 @@ def remove_note(slug: str) -> dict[str, Any]:
     except note_store.NoteStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"deleted": slug}
+
+
+@app.get("/api/notes/{slug}/pdf")
+async def note_pdf(slug: str, request: Request) -> Response:
+    """Render a saved note to PDF with headless Chromium, if it is installed."""
+    note_store.validate_slug(slug)
+    try:
+        info = note_store.read_note(slug)
+    except note_store.NoteStoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        pdf = await pdf_export.render_note_pdf(str(request.base_url), slug)
+    except pdf_export.PdfUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    filename = f"{slug}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Note-Title": info["title"].encode("ascii", "replace").decode(),
+        },
+    )
+
+
+@app.post("/api/notes/export")
+async def export_all(request: Request) -> Response:
+    """Render every saved note to PDF and return them as one zip."""
+    notes = note_store.list_notes()
+    if not notes:
+        raise HTTPException(status_code=404, detail="There are no notes to export.")
+
+    slugs = [note["slug"] for note in notes]
+    try:
+        rendered = await pdf_export.render_many(str(request.base_url), slugs)
+    except pdf_export.PdfUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for note in notes:
+            pdf = rendered.get(note["slug"])
+            if pdf:
+                archive.writestr(f"{note['slug']}.pdf", pdf)
+    buffer.seek(0)
+
+    stamp = date_cls.today().isoformat()
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="notes-{stamp}.zip"'
+        },
+    )
+
+
+@app.get("/print")
+def print_view() -> FileResponse:
+    """Printable single-note sheet, used by the print dialog and by Chromium."""
+    return FileResponse(STATIC_DIR / "print.html")
 
 
 @app.get("/")
