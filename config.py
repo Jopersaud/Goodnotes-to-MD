@@ -56,10 +56,13 @@ PDF_SUFFIXES = {".pdf"}
 # more generous than a single screenshot needs.
 MAX_UPLOAD_BYTES = int(os.environ.get("GNMD_MAX_UPLOAD_BYTES", str(80 * 1024 * 1024)))
 
-# PDF rasterisation. The DPI is what handwriting is rendered at; the long-edge
-# cap stops an unusually large page from producing an enormous PNG.
+# PDF rasterisation. 150 DPI puts a letter or A4 page at roughly 1650-1750 px
+# on the long edge: comfortably under the 2576 px native limit of Claude's
+# high-resolution tier, so pages are not downscaled on the way in, and under
+# the 2000 px per-image ceiling that applies once a request carries more than
+# 20 images - which a long note does, since every page is an image.
 PDF_RENDER_DPI = int(os.environ.get("GNMD_PDF_DPI", "150"))
-MAX_PAGE_EDGE_PX = int(os.environ.get("GNMD_MAX_PAGE_EDGE", "2200"))
+MAX_PAGE_EDGE_PX = int(os.environ.get("GNMD_MAX_PAGE_EDGE", "2000"))
 MAX_PDF_PAGES = int(os.environ.get("GNMD_MAX_PDF_PAGES", "200"))
 
 # Long edge of the thumbnails shown in the page strip.

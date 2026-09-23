@@ -145,7 +145,7 @@ All optional, all environment variables:
 | `GNMD_MAX_UPLOAD_BYTES` | `83886080` | Per-file upload ceiling (a PDF is one file) |
 | `GNMD_UPLOAD_TTL_HOURS` | `24` | Age at which unsaved upload folders are purged |
 | `GNMD_PDF_DPI` | `150` | Resolution PDF pages are rasterised at |
-| `GNMD_MAX_PAGE_EDGE` | `2200` | Long-edge pixel cap for a rasterised page |
+| `GNMD_MAX_PAGE_EDGE` | `2000` | Long-edge pixel cap for a rasterised page |
 | `GNMD_MAX_PDF_PAGES` | `200` | Refuse PDFs longer than this |
 | `GNMD_THUMB_EDGE` | `320` | Long edge of the page-strip thumbnails |
 
@@ -213,7 +213,15 @@ transcription and no image, though every uploaded page is still copied into
   is overwritten. Renaming a note in the preview rewrites the image links to
   match the new slug before saving.
 - **Long notes** have no hard page limit, but more than 15 images at once draws a
-  warning, since that usually means two notes got mixed together.
+  warning, since that usually means two notes got mixed together. Every page is
+  an image Claude reads into context — roughly 2,700–2,900 visual tokens for a
+  letter or A4 page at the default DPI — so a long note is a genuinely large
+  request against your usage allowance. Two page-count thresholds on Claude's
+  side matter if you raise the defaults: past 20 images per request, every image
+  must be under 2000 px on both edges (which is why `GNMD_MAX_PAGE_EDGE`
+  defaults to 2000), and a request tops out at 100 images on 200k-context
+  models. Converting each lecture separately gives better summaries and
+  exercises anyway.
 - **A conversion that stalls** for `GNMD_TIMEOUT` seconds is killed; the timeout
   measures silence from the CLI, not total runtime, so a genuinely long note is
   not cut off mid-answer.
