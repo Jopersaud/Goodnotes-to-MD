@@ -1,0 +1,191 @@
+# GoodNotes → Markdown
+
+A small local web app that turns screenshots of handwritten notes (exported from
+GoodNotes 5 on iPad) into clean Markdown study notes. Each generated file has a
+plain-language summary, the transcribed content organised with headings, any
+diagrams embedded as the original image plus a written description, and a set of
+practice exercises generated from the note's own content.
+
+Handwriting is transcribed by a vision-capable Claude model, not by a classic
+OCR library — traditional OCR does not cope with handwriting. Claude is reached
+through the **Claude Code CLI in headless mode**, so the work draws on your
+Claude subscription rather than a metered API key. See
+[Billing](#billing-read-this-once) below.
+
+## What it produces
+
+```markdown
+---
+title: "Photosynthesis: Light Reactions and Calvin Cycle"
+date: 2026-09-12
+source_images: ["page1.png", "page2.png"]
+subject: "biology"
+---
+
+# Photosynthesis: Light Reactions and Calvin Cycle
+
+## Summary
+
+These notes cover the basics of photosynthesis, including its overall chemical
+equation and where it occurs in the chloroplast. ...
+
+## Notes
+
+light + CO2 + H2O -> glucose + O2
+
+![Chloroplast sketch](../assets/photosynthesis-light-reactions/page1.png)
+
+*A labeled sketch of a chloroplast, boxed off under the introductory notes. It
+marks the thylakoid membrane and stroma referenced in the surrounding text.*
+
+## Practice Exercises
+
+1. Write the overall chemical equation for photosynthesis, including reactants
+   and products.
+2. ...
+```
+
+Notes land in `notes/<slug>.md` and their screenshots in `assets/<slug>/pageN.png`,
+so the relative image links resolve in Obsidian, VS Code, or anything else that
+opens the folder. Both directories are git-ignored — your notes stay local.
+
+## Setup
+
+**Requirements:** Python 3.10+, Node.js (for the Claude Code CLI), and a Claude
+Pro or Max subscription.
+
+```bash
+# 1. Install the Claude Code CLI and log in once (subscription auth, no API key)
+npm install -g @anthropic-ai/claude-code
+claude login
+
+# 2. Confirm the CLI answers
+claude -p "hello"
+
+# 3. Python dependencies
+pip install -r requirements.txt
+
+# 4. Make sure no API key is set in this shell - see Billing below
+echo "ANTHROPIC_API_KEY is: ${ANTHROPIC_API_KEY:-(not set, good)}"
+
+# 5. Run
+uvicorn server:app --reload
+```
+
+Then open <http://localhost:8000>.
+
+## Billing (read this once)
+
+This app never calls the Anthropic API directly and holds no API key. It shells
+out to `claude -p`, which authenticates with whatever `claude login` set up, so
+conversions draw on your subscription's usage allowance.
+
+That behaviour hinges on **`ANTHROPIC_API_KEY` not being set** in the process the
+server runs in. If the CLI sees one it authenticates with it instead and bills
+per token. The server removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` from the subprocess
+environment as a backstop, and the UI shows a banner if it had to. Unsetting them
+in the shell you launch the server from is still the reliable fix.
+`ANTHROPIC_BASE_URL` is passed through untouched, since it only redirects the
+endpoint and stripping it would break a legitimate gateway setup.
+
+Two things worth knowing:
+
+- This usage counts against the same weekly and session caps as interactive
+  Claude Code and claude.ai. A heavy note-processing day eats into that shared
+  allowance.
+- Anthropic has floated changing this billing behaviour before (and paused it).
+  Re-check the current Claude Code / Agent SDK billing docs now and then in case
+  the policy shifts.
+
+## Using it
+
+1. Export the pages of one note from GoodNotes as PNG or JPEG. A note that spans
+   several pages exports as several files, usually `IMG_1234.PNG`, `IMG_1235.PNG`.
+2. Drop them on the app, or click to pick files. They are sorted by filename,
+   which is usually page order; drag the thumbnails to fix the order if not.
+3. Pick a model and hit **Convert**. Progress streams as Claude reads each page.
+4. Check the preview. The title, subject and date are editable, and editing the
+   title updates the front matter and the `#` heading. The Markdown pane is fully
+   editable and the rendered pane follows it. **Regenerate** re-runs the same
+   pages if the first pass was poor.
+5. **Save note** writes the `.md` and copies the screenshots into `assets/<slug>/`.
+6. The **Library** tab lists past conversions; open one to read it, edit it in
+   place, or delete it (which removes its screenshots too).
+
+Handwriting Claude could not read confidently is marked `[unclear: best guess]`
+in the output, highlighted in the rendered view. Those spans are worth checking
+by hand.
+
+## Configuration
+
+All optional, all environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GNMD_NOTES_DIR` | `./notes` | Where `.md` files are written |
+| `GNMD_ASSETS_DIR` | `./assets` | Where screenshots are stored |
+| `GNMD_UPLOADS_DIR` | `./uploads` | Scratch space for unsaved uploads |
+| `GNMD_MODEL` | `sonnet` | Default model in the dropdown |
+| `GNMD_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI |
+| `GNMD_TIMEOUT` | `900` | Seconds of silence before a conversion is killed |
+| `GNMD_PAGE_WARN` | `15` | Page count that triggers the "that's a lot" warning |
+| `GNMD_MAX_IMAGE_BYTES` | `31457280` | Per-image upload ceiling |
+| `GNMD_UPLOAD_TTL_HOURS` | `24` | Age at which unsaved upload folders are purged |
+
+To keep notes outside the repo entirely:
+
+```bash
+GNMD_NOTES_DIR=~/StudyNotes/notes GNMD_ASSETS_DIR=~/StudyNotes/assets \
+  uvicorn server:app --reload
+```
+
+## How it works
+
+```
+static/          drag-and-drop UI, preview, library (vanilla JS, no build step)
+server.py        FastAPI: /api/convert (SSE), /api/notes CRUD, static serving
+claude_client.py prompt construction, the `claude -p` subprocess, response parsing
+note_store.py    markdown assembly, slugs, front matter, files on disk
+config.py        environment-driven configuration
+```
+
+Uploaded pages are written to `uploads/<session>/`, then a single prompt naming
+each page's absolute path in order is handed to:
+
+```
+claude -p <prompt> --output-format stream-json --verbose \
+       --allowedTools Read --add-dir <session dir> --model <model>
+```
+
+Claude reads the images with its own Read tool — that is what gives it vision on
+the pages — and returns one JSON object (title, date guess, subject, summary,
+markdown body with `{{page_N}}` placeholders, per-diagram descriptions,
+exercises). `stream-json` is used rather than plain `json` so the UI can show
+which page is being read and how much has been written.
+
+The CLI wraps the model's reply in its own envelope whose schema shifts between
+versions, so the parser reads the `result` field defensively and falls back to
+extracting the first balanced `{...}` span, tolerating code fences and the
+unescaped newlines models sometimes emit inside JSON strings. When that fails,
+or the subprocess errors, the UI gets a readable message that points at
+`claude login` as the likely cause rather than a stack trace.
+
+Diagrams are never redrawn as ASCII art, SVG, or Mermaid. Pages with a drawing
+keep the original image, embedded at the point in the content where it belongs,
+with a prose description directly below. Text-only pages contribute their
+transcription and no image, though every uploaded page is still copied into
+`assets/<slug>/` as source material.
+
+## Notes on behaviour
+
+- **Duplicate titles** get a `-2`, `-3` suffix on the slug and filename; nothing
+  is overwritten. Renaming a note in the preview rewrites the image links to
+  match the new slug before saving.
+- **Long notes** have no hard page limit, but more than 15 images at once draws a
+  warning, since that usually means two notes got mixed together.
+- **A conversion that stalls** for `GNMD_TIMEOUT` seconds is killed; the timeout
+  measures silence from the CLI, not total runtime, so a genuinely long note is
+  not cut off mid-answer.
+- **Unsaved uploads** are purged after `GNMD_UPLOAD_TTL_HOURS`. Saving a note
+  clears its session immediately.
