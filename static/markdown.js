@@ -73,17 +73,127 @@
     return out.join('\n');
   }
 
+  // A left-to-right scanner rather than a set of regexes. Regexes kept getting
+  // the ambiguous cases wrong - "$40 and $25" pairing as math, a formula that
+  // wraps across a line not matching at all - because deciding whether a `$`
+  // opens maths needs lookahead that a single pattern can't express.
+  const INLINE_MATH_LIMIT = 500;   // a longer span is prose that happens to hold $
+  const DISPLAY_MATH_LIMIT = 6000;
+
+  function isSpace(ch) {
+    return ch === undefined || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+  }
+
+  function isDigit(ch) {
+    return ch >= '0' && ch <= '9';
+  }
+
+  // Text that opened with `$` but is really money rather than maths. Strict
+  // renderers rely on "no space after the $" alone, but that also throws away
+  // `$ x + y $`, which is valid LaTeX and does turn up. Padding is allowed
+  // instead, and this catches the prices that the relaxation would let in.
+  function looksLikeMoney(tex) {
+    return /^\d/.test(tex) && !/[\\^_{}=+\-*/<>]/.test(tex);
+  }
+
+  // Find the end of an inline span opened at `from`. Returns -1 when this `$`
+  // does not open maths after all, so the caller emits it as a literal.
+  function findInlineClose(text, from) {
+    for (let j = from; j < text.length && j - from < INLINE_MATH_LIMIT; j++) {
+      const ch = text[j];
+      if (ch === '\\') { j++; continue; }            // \$ and friends are literal
+      if (ch === '\n' && text[j + 1] === '\n') return -1;  // never cross a paragraph
+      if (ch !== '$') continue;
+
+      // The first `$` we meet either closes the span or nothing does. Giving up
+      // here is what keeps "costs $40 today, and $x^2$ is the term" intact: the
+      // price is left alone instead of swallowing the sentence up to the real
+      // formula. A closing `$` right before a digit is a second price.
+      if (isDigit(text[j + 1])) return -1;
+      const tex = text.slice(from, j);
+      if (!tex.trim() || looksLikeMoney(tex.trim())) return -1;
+      return j;
+    }
+    return -1;
+  }
+
+  function findLiteral(text, needle, from, limit) {
+    const at = text.indexOf(needle, from);
+    if (at === -1 || at - from > limit) return -1;
+    return at;
+  }
+
+  // Bare LaTeX environments: Claude sometimes writes \begin{align} ... \end{align}
+  // with no $$ around it, which is valid LaTeX and must still be typeset.
+  const ENV_OPEN = /^\\begin\{([a-zA-Z*]+)\}/;
+
   function stashMath(text) {
-    // $$...$$ and \[...\] are display; $...$ and \(...\) are inline. A bare
-    // dollar amount ("$5 and $10") must not start a math span, so inline $...$
-    // requires a non-space character just inside each delimiter.
-    return text
-      .replace(/\$\$([\s\S]+?)\$\$/g, function (_m, tex) { return keepMath(tex, true); })
-      .replace(/\\\[([\s\S]+?)\\\]/g, function (_m, tex) { return keepMath(tex, true); })
-      .replace(/\\\(([\s\S]+?)\\\)/g, function (_m, tex) { return keepMath(tex, false); })
-      .replace(/\$(?!\s)((?:[^$\\\n]|\\.)+?)(?<!\s)\$/g, function (_m, tex) {
-        return keepMath(tex, false);
-      });
+    let out = '';
+    let i = 0;
+
+    while (i < text.length) {
+      const ch = text[i];
+
+      if (ch === '\\') {
+        const rest = text.slice(i);
+        if (text[i + 1] === '$') { out += '$'; i += 2; continue; }   // escaped dollar
+        if (text[i + 1] === '(') {
+          const end = findLiteral(text, '\\)', i + 2, INLINE_MATH_LIMIT);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 2, end), false);
+            i = end + 2;
+            continue;
+          }
+        }
+        if (text[i + 1] === '[') {
+          const end = findLiteral(text, '\\]', i + 2, DISPLAY_MATH_LIMIT);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 2, end), true);
+            i = end + 2;
+            continue;
+          }
+        }
+        const env = rest.match(ENV_OPEN);
+        if (env) {
+          const closer = '\\end{' + env[1] + '}';
+          const end = findLiteral(text, closer, i, DISPLAY_MATH_LIMIT);
+          if (end !== -1) {
+            const stop = end + closer.length;
+            out += keepMath(text.slice(i, stop), true);
+            i = stop;
+            continue;
+          }
+        }
+        out += text[i] + (text[i + 1] || '');
+        i += 2;
+        continue;
+      }
+
+      if (ch === '$') {
+        if (text[i + 1] === '$') {
+          const end = findLiteral(text, '$$', i + 2, DISPLAY_MATH_LIMIT);
+          if (end !== -1 && end > i + 2) {
+            out += keepMath(text.slice(i + 2, end), true);
+            i = end + 2;
+            continue;
+          }
+        } else if (text[i + 1] !== '\n' && text[i + 1] !== undefined) {
+          const end = findInlineClose(text, i + 1);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 1, end).trim(), false);
+            i = end + 1;
+            continue;
+          }
+        }
+        out += ch;
+        i++;
+        continue;
+      }
+
+      out += ch;
+      i++;
+    }
+    return out;
   }
 
   function keepMath(tex, display) {
