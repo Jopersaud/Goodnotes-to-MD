@@ -120,7 +120,33 @@ Two things worth knowing:
    pages if the first pass was poor.
 5. **Save note** writes the `.md` and copies the screenshots into `assets/<slug>/`.
 6. The **Library** tab lists past conversions; open one to read it, edit it in
-   place, or delete it (which removes its screenshots too).
+   place, delete it (which removes its screenshots too), or turn it into a PDF.
+
+## Maths and PDF export
+
+Mathematical notation is transcribed as LaTeX — `$...$` inline, `$$...$$` for
+anything displayed, including matrices, systems, integrals and summations — and
+rendered with [KaTeX](https://katex.org), which is vendored under
+`static/vendor/katex/` so it works with no network and no build step. Dollar
+signs in ordinary prose (`$40`) and maths inside code fences are left alone.
+
+Two ways to get a PDF, both from the **Library** tab:
+
+- **Print / Save as PDF** opens a print-styled sheet and your browser's print
+  dialog. Needs nothing installed and works everywhere.
+- **Download PDF** renders it server-side in one click, and **Export all as PDF**
+  zips up the whole library. These appear only if Playwright is installed:
+
+  ```bash
+  pip install playwright && playwright install chromium
+  ```
+
+  Without it the buttons stay hidden and printing still works. If Playwright
+  cannot find a browser, point `GNMD_CHROMIUM_PATH` at one.
+
+Both routes render the same `/print` page, so the PDF matches the preview —
+typeset maths, embedded diagrams, captions kept with their images, and page
+breaks avoided inside equations, tables and figures.
 
 Handwriting Claude could not read confidently is marked `[unclear: best guess]`
 in the output, highlighted in the rendered view. Those spans are worth checking
@@ -148,6 +174,8 @@ All optional, all environment variables:
 | `GNMD_MAX_PAGE_EDGE` | `2000` | Long-edge pixel cap for a rasterised page |
 | `GNMD_MAX_PDF_PAGES` | `200` | Refuse PDFs longer than this |
 | `GNMD_THUMB_EDGE` | `320` | Long edge of the page-strip thumbnails |
+| `GNMD_CHROMIUM_PATH` | *(auto)* | Chromium binary for one-click PDF, if Playwright can't find one |
+| `GNMD_PDF_TIMEOUT_MS` | `30000` | Per-note ceiling when rendering a PDF |
 
 To keep notes outside the repo entirely:
 
@@ -160,8 +188,10 @@ GNMD_NOTES_DIR=~/StudyNotes/notes GNMD_ASSETS_DIR=~/StudyNotes/assets \
 
 ```
 static/          drag-and-drop UI, preview, library (vanilla JS, no build step)
-server.py        FastAPI: /api/pages, /api/convert (SSE), /api/notes CRUD
+static/print.*   the printable sheet, shared by the print dialog and Chromium
+server.py        FastAPI: /api/pages, /api/convert (SSE), /api/notes CRUD, /print
 page_prep.py     uploads -> page images: PDF rasterising, thumbnails
+pdf_export.py    optional one-click PDF via headless Chromium
 claude_client.py prompt construction, the `claude -p` subprocess, response parsing
 note_store.py    markdown assembly, slugs, front matter, files on disk
 config.py        environment-driven configuration
@@ -206,6 +236,18 @@ keep the original image, embedded at the point in the content where it belongs,
 with a prose description directly below. Text-only pages contribute their
 transcription and no image, though every uploaded page is still copied into
 `assets/<slug>/` as source material.
+
+## Planned
+
+Specs for work that is designed but not built:
+
+- [`docs/ipad-access.md`](docs/ipad-access.md) — reaching the app from an iPad
+  over Tailscale, and the password gate and touch reordering that need to exist
+  first. Explains why the converter cannot run on Supabase or similar.
+- [`docs/review-pass.md`](docs/review-pass.md) — an opt-in second pass that
+  re-reads the pages against the generated note and reports transcription and
+  consistency errors, with the free local LaTeX and structure checks that should
+  run before spending anything.
 
 ## Notes on behaviour
 

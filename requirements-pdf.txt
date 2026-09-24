@@ -1,0 +1,5 @@
+# Optional: one-click and batch PDF export via headless Chromium.
+# Printing from the browser needs none of this.
+#   pip install -r requirements-pdf.txt
+#   playwright install chromium
+playwright>=1.40

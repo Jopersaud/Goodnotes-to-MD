@@ -74,6 +74,29 @@
     return src.replace(/^(\.\.\/)?assets\//, '/assets/');
   }
 
+  // The markdown renderer leaves math as <span class="math">raw tex</span>;
+  // KaTeX turns those into typeset output in place. If KaTeX failed to load,
+  // the raw TeX simply stays visible rather than the page breaking.
+  function typesetMath(el) {
+    if (!window.katex) return;
+    el.querySelectorAll('.math').forEach(function (node) {
+      if (node.dataset.typeset === 'yes') return;
+      try {
+        window.katex.render(node.textContent, node, {
+          displayMode: node.classList.contains('math-display'),
+          throwOnError: false,
+          errorColor: '#a3271f',
+          trust: false,
+          strict: 'ignore',
+        });
+        node.dataset.typeset = 'yes';
+      } catch (error) {
+        node.classList.add('math-failed');
+        node.title = String(error && error.message || error);
+      }
+    });
+  }
+
   function renderInto(el, markdown, resolver) {
     const result = window.NoteMarkdown.render(markdown, { resolveImage: resolver });
     el.innerHTML = '';
@@ -97,6 +120,7 @@
     const body = document.createElement('div');
     body.innerHTML = result.html;
     el.appendChild(body);
+    typesetMath(el);
   }
 
   /* ------------------------------- tabs -------------------------------- */
@@ -476,6 +500,7 @@
       notes = [];
     }
     $('tab-library').textContent = notes.length ? 'Library (' + notes.length + ')' : 'Library';
+    show($('export-all'), notes.length > 0 && !!(state.config && state.config.pdf_export));
 
     const host = $('notes-list');
     host.innerHTML = '';
@@ -522,6 +547,7 @@
       banner($('note-status'), null);
       $('note-path').textContent = note.path;
       $('note-editor').value = note.markdown;
+      show($('note-pdf'), !!(state.config && state.config.pdf_export));
       setEditing(false);
       renderInto($('note-render'), note.markdown, resolveSavedImage);
     } catch (error) {
@@ -536,6 +562,9 @@
     show($('note-save'), editing);
     show($('note-cancel'), editing);
     show($('note-edit'), !editing);
+    // Printing mid-edit would silently produce the last saved version.
+    show($('note-print'), !editing);
+    show($('note-pdf'), !editing && !!(state.config && state.config.pdf_export));
   }
 
   async function saveOpenNote() {
@@ -553,6 +582,65 @@
       loadNotes();
     } catch (error) {
       banner($('note-status'), 'Could not save changes.', String(error.message || error));
+    }
+  }
+
+  // A failed download must not leave the browser showing a JSON error page, so
+  // these fetch the bytes and hand them to a temporary object URL.
+  async function downloadBlob(path, options, fallbackName) {
+    const response = await fetch(path, options);
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = await response.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (error) { /* keep statusText */ }
+      throw new Error(detail);
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = match ? match[1] : fallbackName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+  }
+
+  async function downloadNotePdf() {
+    if (!state.openNote) return;
+    const button = $('note-pdf');
+    button.disabled = true;
+    button.textContent = 'Rendering…';
+    banner($('note-status'), null);
+    try {
+      await downloadBlob(
+        '/api/notes/' + encodeURIComponent(state.openNote.slug) + '/pdf',
+        {},
+        state.openNote.slug + '.pdf'
+      );
+    } catch (error) {
+      banner($('note-status'), 'Could not render that PDF.', String(error.message || error));
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Download PDF';
+    }
+  }
+
+  async function exportAllPdf() {
+    const button = $('export-all');
+    button.disabled = true;
+    button.textContent = 'Rendering…';
+    try {
+      await downloadBlob('/api/notes/export', { method: 'POST' }, 'notes.zip');
+    } catch (error) {
+      window.alert('Could not export the library.\n\n' + (error.message || error));
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Export all as PDF';
     }
   }
 
@@ -673,6 +761,21 @@
       show($('library-list'), true);
       state.openNote = null;
     });
+    // Zero-dependency route: the browser's own print dialog, which every
+    // platform can "Save as PDF" from.
+    $('note-print').addEventListener('click', function () {
+      if (!state.openNote) return;
+      window.open(
+        '/print?slug=' + encodeURIComponent(state.openNote.slug) + '&print=1',
+        '_blank',
+        'noopener'
+      );
+    });
+
+    // One-click route, only shown when headless Chromium is installed.
+    $('note-pdf').addEventListener('click', downloadNotePdf);
+    $('export-all').addEventListener('click', exportAllPdf);
+
     $('note-edit').addEventListener('click', function () { setEditing(true); });
     $('note-cancel').addEventListener('click', function () {
       if (state.openNote) $('note-editor').value = state.openNote.markdown;

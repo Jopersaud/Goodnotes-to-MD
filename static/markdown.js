@@ -39,6 +39,180 @@
     return { meta: meta, body: rest };
   }
 
+  // Math spans are pulled out before markdown runs and put back afterwards.
+  // Without this, `\begin{bmatrix}a & b \\ c & d\end{bmatrix}` loses its `\\`
+  // row breaks and `x_1 * y_1` turns into emphasis. Collected per render pass.
+  let mathSpans = [];
+
+  // Apply the math scan everywhere except inside fenced code, where a dollar
+  // sign is just a dollar sign.
+  function stashMathOutsideFences(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let buffer = [];
+    let inFence = false;
+
+    function flush() {
+      if (buffer.length) {
+        out.push(stashMath(buffer.join('\n')));
+        buffer = [];
+      }
+    }
+
+    lines.forEach(function (line) {
+      if (/^\s*```/.test(line)) {
+        if (!inFence) flush();
+        inFence = !inFence;
+        out.push(line);
+        return;
+      }
+      if (inFence) out.push(line);
+      else buffer.push(line);
+    });
+    flush();
+    return out.join('\n');
+  }
+
+  // A left-to-right scanner rather than a set of regexes. Regexes kept getting
+  // the ambiguous cases wrong - "$40 and $25" pairing as math, a formula that
+  // wraps across a line not matching at all - because deciding whether a `$`
+  // opens maths needs lookahead that a single pattern can't express.
+  const INLINE_MATH_LIMIT = 500;   // a longer span is prose that happens to hold $
+  const DISPLAY_MATH_LIMIT = 6000;
+
+  function isSpace(ch) {
+    return ch === undefined || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+  }
+
+  function isDigit(ch) {
+    return ch >= '0' && ch <= '9';
+  }
+
+  // Text that opened with `$` but is really money rather than maths. Strict
+  // renderers rely on "no space after the $" alone, but that also throws away
+  // `$ x + y $`, which is valid LaTeX and does turn up. Padding is allowed
+  // instead, and this catches the prices that the relaxation would let in.
+  function looksLikeMoney(tex) {
+    return /^\d/.test(tex) && !/[\\^_{}=+\-*/<>]/.test(tex);
+  }
+
+  // Find the end of an inline span opened at `from`. Returns -1 when this `$`
+  // does not open maths after all, so the caller emits it as a literal.
+  function findInlineClose(text, from) {
+    for (let j = from; j < text.length && j - from < INLINE_MATH_LIMIT; j++) {
+      const ch = text[j];
+      if (ch === '\\') { j++; continue; }            // \$ and friends are literal
+      if (ch === '\n' && text[j + 1] === '\n') return -1;  // never cross a paragraph
+      if (ch !== '$') continue;
+
+      // The first `$` we meet either closes the span or nothing does. Giving up
+      // here is what keeps "costs $40 today, and $x^2$ is the term" intact: the
+      // price is left alone instead of swallowing the sentence up to the real
+      // formula. A closing `$` right before a digit is a second price.
+      if (isDigit(text[j + 1])) return -1;
+      const tex = text.slice(from, j);
+      if (!tex.trim() || looksLikeMoney(tex.trim())) return -1;
+      return j;
+    }
+    return -1;
+  }
+
+  function findLiteral(text, needle, from, limit) {
+    const at = text.indexOf(needle, from);
+    if (at === -1 || at - from > limit) return -1;
+    return at;
+  }
+
+  // Bare LaTeX environments: Claude sometimes writes \begin{align} ... \end{align}
+  // with no $$ around it, which is valid LaTeX and must still be typeset.
+  const ENV_OPEN = /^\\begin\{([a-zA-Z*]+)\}/;
+
+  function stashMath(text) {
+    let out = '';
+    let i = 0;
+
+    while (i < text.length) {
+      const ch = text[i];
+
+      if (ch === '\\') {
+        const rest = text.slice(i);
+        if (text[i + 1] === '$') { out += '$'; i += 2; continue; }   // escaped dollar
+        if (text[i + 1] === '(') {
+          const end = findLiteral(text, '\\)', i + 2, INLINE_MATH_LIMIT);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 2, end), false);
+            i = end + 2;
+            continue;
+          }
+        }
+        if (text[i + 1] === '[') {
+          const end = findLiteral(text, '\\]', i + 2, DISPLAY_MATH_LIMIT);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 2, end), true);
+            i = end + 2;
+            continue;
+          }
+        }
+        const env = rest.match(ENV_OPEN);
+        if (env) {
+          const closer = '\\end{' + env[1] + '}';
+          const end = findLiteral(text, closer, i, DISPLAY_MATH_LIMIT);
+          if (end !== -1) {
+            const stop = end + closer.length;
+            out += keepMath(text.slice(i, stop), true);
+            i = stop;
+            continue;
+          }
+        }
+        out += text[i] + (text[i + 1] || '');
+        i += 2;
+        continue;
+      }
+
+      if (ch === '$') {
+        if (text[i + 1] === '$') {
+          const end = findLiteral(text, '$$', i + 2, DISPLAY_MATH_LIMIT);
+          if (end !== -1 && end > i + 2) {
+            out += keepMath(text.slice(i + 2, end), true);
+            i = end + 2;
+            continue;
+          }
+        } else if (text[i + 1] !== '\n' && text[i + 1] !== undefined) {
+          const end = findInlineClose(text, i + 1);
+          if (end !== -1) {
+            out += keepMath(text.slice(i + 1, end).trim(), false);
+            i = end + 1;
+            continue;
+          }
+        }
+        out += ch;
+        i++;
+        continue;
+      }
+
+      out += ch;
+      i++;
+    }
+    return out;
+  }
+
+  function keepMath(tex, display) {
+    mathSpans.push({ tex: tex, display: display });
+    return '\u0000MATH' + (mathSpans.length - 1) + '\u0000';
+  }
+
+  function restoreMath(html) {
+    return html.replace(/\u0000MATH(\d+)\u0000/g, function (_m, index) {
+      const span = mathSpans[Number(index)];
+      if (!span) return '';
+      // KaTeX renders these in place after the HTML lands in the document;
+      // if it is unavailable the raw TeX still shows, which beats nothing.
+      const tag = span.display ? 'div' : 'span';
+      const cls = span.display ? 'math math-display' : 'math math-inline';
+      return '<' + tag + ' class="' + cls + '">' + escapeHtml(span.tex) + '</' + tag + '>';
+    });
+  }
+
   function renderInline(text, resolveImage) {
     const codes = [];
     let out = escapeHtml(text);
@@ -141,7 +315,13 @@
     options = options || {};
     const resolveImage = options.resolveImage;
     const split = splitFrontMatter(markdown || '');
-    const lines = split.body.split('\n');
+
+    // Only the outermost call stashes and restores: nested calls (blockquotes)
+    // receive text whose math is already tokenised, and share the same table.
+    const outermost = !options._nested;
+    if (outermost) mathSpans = [];
+    const body = outermost ? stashMathOutsideFences(split.body) : split.body;
+    const lines = body.split('\n');
     let html = '';
     let index = 0;
 
@@ -187,7 +367,9 @@
           buffer.push(lines[index].replace(/^\s*>\s?/, ''));
           index++;
         }
-        html += '<blockquote>' + render(buffer.join('\n'), options).html + '</blockquote>';
+        html += '<blockquote>'
+          + render(buffer.join('\n'), Object.assign({}, options, { _nested: true })).html
+          + '</blockquote>';
         continue;
       }
 
@@ -235,10 +417,15 @@
         index++;
       }
       const text = renderInline(paragraph.join(' '), resolveImage);
-      // A lone image reads better without a paragraph wrapper.
-      html += /^<img[^>]*>$/.test(text) ? text : '<p>' + text + '</p>';
+      // A lone image, or a display equation on its own, reads better without a
+      // paragraph wrapper - and a <div> inside a <p> is invalid HTML anyway.
+      const loneMath = text.match(/^\u0000MATH(\d+)\u0000$/);
+      const bare = /^<img[^>]*>$/.test(text)
+        || (loneMath && mathSpans[Number(loneMath[1])] && mathSpans[Number(loneMath[1])].display);
+      html += bare ? text : '<p>' + text + '</p>';
     }
 
+    if (outermost) html = restoreMath(html);
     return { html: html, meta: split.meta };
   }
 
