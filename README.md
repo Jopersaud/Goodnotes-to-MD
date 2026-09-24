@@ -3,9 +3,9 @@
 A small local web app that turns handwritten notes exported from GoodNotes 5 on
 iPad — as a **PDF** or as **screenshots** — into clean Markdown study notes. Each
 generated file has a plain-language summary, the transcribed content organised
-with headings, any diagrams embedded as the original image plus a written
-description, and a set of practice exercises generated from the note's own
-content.
+with headings, and any diagrams embedded as the original image plus a written
+description. Practice exercises are one button away, generated from the note's
+own content when you want them.
 
 PDF is the easier export: one file per note, pages already in the right order.
 The app splits it into page images for you.
@@ -48,6 +48,10 @@ marks the thylakoid membrane and stroma referenced in the surrounding text.*
    and products.
 2. ...
 ```
+
+The Practice Exercises section is added by the **Add practice exercises**
+button, not by the conversion, so a note you only want transcribed never pays
+for questions you did not ask for.
 
 Notes land in `notes/<slug>.md` and their screenshots in `assets/<slug>/pageN.png`,
 so the relative image links resolve in Obsidian, VS Code, or anything else that
@@ -118,9 +122,13 @@ Two things worth knowing:
    title updates the front matter and the `#` heading. The Markdown pane is fully
    editable and the rendered pane follows it. **Regenerate** re-runs the same
    pages if the first pass was poor.
-5. **Save note** writes the `.md` and copies the screenshots into `assets/<slug>/`.
-6. The **Library** tab lists past conversions; open one to read it, edit it in
-   place, delete it (which removes its screenshots too), or turn it into a PDF.
+5. **Add practice exercises** if you want them — a separate, cheaper call that
+   reads the note text rather than the pages. Optional, and repeatable: asking
+   again replaces the section.
+6. **Save note** writes the `.md` and copies the screenshots into `assets/<slug>/`.
+7. The **Library** tab lists past conversions; open one to read it, edit it in
+   place, add exercises, delete it (which removes its screenshots too), or turn
+   it into a PDF.
 
 ## Maths and PDF export
 
@@ -189,7 +197,8 @@ GNMD_NOTES_DIR=~/StudyNotes/notes GNMD_ASSETS_DIR=~/StudyNotes/assets \
 ```
 static/          drag-and-drop UI, preview, library (vanilla JS, no build step)
 static/print.*   the printable sheet, shared by the print dialog and Chromium
-server.py        FastAPI: /api/pages, /api/convert (SSE), /api/notes CRUD, /print
+server.py        FastAPI: /api/pages, /api/convert (SSE), /api/exercises,
+                 /api/notes CRUD, /print
 page_prep.py     uploads -> page images: PDF rasterising, thumbnails
 pdf_export.py    optional one-click PDF via headless Chromium
 claude_client.py prompt construction, the `claude -p` subprocess, response parsing
@@ -220,9 +229,14 @@ claude -p <prompt> --output-format stream-json --verbose \
 
 Claude reads the images with its own Read tool — that is what gives it vision on
 the pages — and returns one JSON object (title, date guess, subject, summary,
-markdown body with `{{page_N}}` placeholders, per-diagram descriptions,
-exercises). `stream-json` is used rather than plain `json` so the UI can show
-which page is being read and how much has been written.
+markdown body with `{{page_N}}` placeholders, and per-diagram descriptions).
+`stream-json` is used rather than plain `json` so the UI can show which page is
+being read and how much has been written.
+
+**Add practice exercises** is a second, separate call. It is given the note's
+text and no images at all, which makes it cheap next to a conversion - a few
+seconds and a few hundred output tokens - and it runs with no tools enabled.
+Asking twice replaces the section rather than stacking a second one.
 
 The CLI wraps the model's reply in its own envelope whose schema shifts between
 versions, so the parser reads the `result` field defensively and falls back to
@@ -264,6 +278,9 @@ Specs for work that is designed but not built:
   defaults to 2000), and a request tops out at 100 images on 200k-context
   models. Converting each lecture separately gives better summaries and
   exercises anyway.
+- **Exercises are opt-in.** Conversion transcribes only. The button writes the
+  Practice Exercises section, and for a saved note it writes straight back to
+  the file.
 - **A conversion that stalls** for `GNMD_TIMEOUT` seconds is killed; the timeout
   measures silence from the CLI, not total runtime, so a genuinely long note is
   not cut off mid-answer.

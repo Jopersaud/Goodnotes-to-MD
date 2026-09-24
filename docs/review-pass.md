@@ -44,8 +44,8 @@ Run before spending anything. These are mechanical and deterministic:
   an image link pointing at a file not in `assets/<slug>/`, front matter whose
   `source_images` disagrees with what is on disk, a diagram listed with no
   description.
-- **Exercise sanity.** Fewer than 3 or more than 6 exercises; an exercise
-  identical to another.
+- **Exercise sanity.** Where a Practice Exercises section exists, fewer than 3
+  or more than 6 exercises, or an exercise identical to another.
 
 Tier 1 findings should surface in the preview immediately after conversion,
 before the user decides whether to pay for Tier 2.
@@ -121,11 +121,10 @@ POST /api/notes/{slug}/review      -> SSE, same envelope as /api/convert
 POST /api/review                   -> same, for an unsaved note (session_id + markdown)
 ```
 
-Reuses `claude_client.convert_pages`' subprocess plumbing: the same
-`stream-json` parsing, the same error paths, the same env stripping. The only
-new parts are the prompt and the payload schema, so most of `claude_client.py`
-should be generalised rather than copied — extract the "run a prompt over these
-pages and parse JSON back" core, and have conversion and review both call it.
+Reuses `claude_client.run_cli`, which already does exactly this: spawn the CLI,
+stream progress, parse the envelope, raise `ConversionError` with a UI-ready
+message. That extraction happened when exercise generation moved to its own
+button, so review only needs a prompt, a schema, and a findings UI.
 
 ## Cost
 

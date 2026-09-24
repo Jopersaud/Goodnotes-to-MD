@@ -420,7 +420,6 @@
         ? 'diagrams on page ' + payload.diagram_pages.join(', ')
         : 'no diagrams detected'
     );
-    bits.push(payload.exercise_count + ' exercise(s)');
     if (!payload.date_guess) bits.push('no date in the note, using today');
     bits.push('via ' + payload.model);
     $('result-summary').textContent = bits.join(' · ');
@@ -455,6 +454,68 @@
 
     $('out-markdown').value = markdown;
     renderPreview();
+  }
+
+  // Exercises are generated on request rather than during conversion: they are
+  // a separate call that reads the note text only, never the page images, so
+  // asking for them is far cheaper than a conversion and not paid for by
+  // people who only want the transcription.
+  async function addExercises(button, run) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Writing exercises…';
+    try {
+      await run();
+    } catch (error) {
+      throw error;
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  async function addPreviewExercises() {
+    if (!state.result) return;
+    banner($('convert-error'), null);
+    try {
+      await addExercises($('exercises'), async function () {
+        const body = await api('/api/exercises', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            markdown: $('out-markdown').value,
+            model: $('model').value || null,
+          }),
+        });
+        $('out-markdown').value = body.markdown;
+        renderPreview();
+      });
+    } catch (error) {
+      banner($('convert-error'), 'Could not write exercises.', String(error.message || error));
+    }
+  }
+
+  async function addNoteExercises() {
+    if (!state.openNote) return;
+    banner($('note-status'), null);
+    try {
+      await addExercises($('note-exercises'), async function () {
+        const body = await api(
+          '/api/notes/' + encodeURIComponent(state.openNote.slug) + '/exercises',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: null, markdown: '' }),
+          }
+        );
+        state.openNote.markdown = body.markdown;
+        $('note-editor').value = body.markdown;
+        renderInto($('note-render'), body.markdown, resolveSavedImage);
+        banner($('note-status'), body.exercises.length + ' exercises added and saved.');
+      });
+    } catch (error) {
+      banner($('note-status'), 'Could not write exercises.', String(error.message || error));
+    }
   }
 
   async function saveNote() {
@@ -562,8 +623,10 @@
     show($('note-save'), editing);
     show($('note-cancel'), editing);
     show($('note-edit'), !editing);
-    // Printing mid-edit would silently produce the last saved version.
+    // Printing mid-edit would silently produce the last saved version, and
+    // generating exercises writes to the file under the editor.
     show($('note-print'), !editing);
+    show($('note-exercises'), !editing);
     show($('note-pdf'), !editing && !!(state.config && state.config.pdf_export));
   }
 
@@ -735,6 +798,8 @@
     $('clear').addEventListener('click', function () { clearPages(true); });
     $('regenerate').addEventListener('click', convert);
     $('save').addEventListener('click', saveNote);
+    $('exercises').addEventListener('click', addPreviewExercises);
+    $('note-exercises').addEventListener('click', addNoteExercises);
     $('copy').addEventListener('click', async function () {
       try {
         await navigator.clipboard.writeText($('out-markdown').value);

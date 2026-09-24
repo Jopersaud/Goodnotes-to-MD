@@ -264,7 +264,7 @@ async def convert(request: ConvertRequest) -> StreamingResponse:
                 "date": payload["date_guess"] or date_cls.today().isoformat(),
                 "date_guess": payload["date_guess"],
                 "diagram_pages": [d["page"] for d in payload["diagrams"]],
-                "exercise_count": len(payload["exercises"]),
+                "has_exercises": False,
                 "markdown": markdown,
                 "pages": [
                     {
@@ -371,6 +371,50 @@ def remove_note(slug: str) -> dict[str, Any]:
     except note_store.NoteStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"deleted": slug}
+
+
+class ExerciseRequest(BaseModel):
+    markdown: str
+    model: str | None = None
+
+
+async def _exercises_for(markdown: str, model: str | None) -> list[str]:
+    """Generate exercises from note text. Reads no images, so it is cheap."""
+    try:
+        return await claude_client.generate_exercises(
+            markdown, workdir=config.UPLOADS_DIR, model=model
+        )
+    except ConversionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{exc.message} {exc.detail}".strip(),
+        ) from exc
+
+
+@app.post("/api/exercises")
+async def make_exercises(request: ExerciseRequest) -> dict[str, Any]:
+    """Exercises for a note that has not been saved yet."""
+    exercises = await _exercises_for(request.markdown, request.model)
+    return {
+        "exercises": exercises,
+        "markdown": note_store.set_exercises(request.markdown, exercises),
+    }
+
+
+@app.post("/api/notes/{slug}/exercises")
+async def make_note_exercises(slug: str, request: ExerciseRequest) -> dict[str, Any]:
+    """Exercises for a saved note, written straight back to the file."""
+    try:
+        info = note_store.read_note(slug)
+    except note_store.NoteStoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    exercises = await _exercises_for(info["markdown"], request.model)
+    markdown = note_store.set_exercises(info["markdown"], exercises)
+    updated = note_store.update_note(slug, markdown)
+    updated["markdown"] = markdown
+    updated["exercises"] = exercises
+    return updated
 
 
 @app.get("/api/notes/{slug}/pdf")

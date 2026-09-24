@@ -106,8 +106,6 @@ chart, graph, or drawing (as opposed to purely text handwriting). Each object is
 {{"page": <1-indexed page number>, "alt": "<short alt text>", "description": \
 "<2-4 sentences of prose describing what the diagram depicts and what it is \
 showing the reader>"}}. Use an empty list if no page has a diagram.
-- "exercises": a list of 3 to 6 original practice exercises as strings, testing \
-recall and application of the actual content of these notes.
 
 Rules for "markdown_body":
 - Reproduce the structure of the handwritten note using `##` and `###` headings. \
@@ -134,17 +132,38 @@ placeholder for diagram pages only.
 or a table. Always rely on the embedded original image plus your prose \
 description.
 
-Rules for "exercises":
-- Base them on the actual content of these notes, not generic questions about \
-the subject.
-- Match the question type to the material: worked problems for math and science, \
-short-answer recall for conceptual and humanities material, fill-in-the-blank or \
-term-to-definition for vocabulary. Mix types where the note mixes material. \
-Decide the mix yourself.
-- Do not include answers.
-
 If the pages are too unreadable to transcribe at all, still return the JSON \
 object, with your best attempt and `[unclear: ...]` markers throughout.
+"""
+
+
+EXERCISES_TEMPLATE = """Below is a set of study notes, transcribed from a \
+student's handwritten pages.
+
+Write 3 to 6 original practice exercises that test recall and application of \
+what these notes actually cover.
+
+Respond with a single JSON object and nothing else - no markdown fences, no \
+commentary. It has exactly one key, "exercises", whose value is a list of \
+strings.
+
+Rules:
+- Base every exercise on the actual content below, not on general knowledge of \
+the subject. A question that could be answered without having read these notes \
+is a bad question.
+- Match the question type to the material: worked problems for maths and \
+science, short-answer recall for conceptual and humanities material, \
+fill-in-the-blank or term-to-definition for vocabulary. Mix the types where the \
+note mixes material. Decide the mix yourself.
+- Where a span is marked `[unclear: ...]`, the transcription was uncertain. Do \
+not build an exercise that depends on it.
+- Write mathematics as LaTeX, `$...$` inline and `$$...$$` displayed, matching \
+the notes.
+- Do not include answers.
+
+The notes:
+
+{note}
 """
 
 
@@ -280,10 +299,6 @@ def normalize_payload(raw: dict[str, Any], page_count: int) -> dict[str, Any]:
             diagrams.append({"page": page, "alt": "diagram", "description": ""})
     diagrams.sort(key=lambda d: d["page"])
 
-    exercises = [
-        as_text(item) for item in (raw.get("exercises") or []) if as_text(item)
-    ]
-
     date_guess = as_text(raw.get("date_guess"))
 
     return {
@@ -293,7 +308,6 @@ def normalize_payload(raw: dict[str, Any], page_count: int) -> dict[str, Any]:
         "summary": as_text(raw.get("summary")),
         "markdown_body": as_text(raw.get("markdown_body")),
         "diagrams": diagrams,
-        "exercises": exercises,
     }
 
 
@@ -376,26 +390,25 @@ def _describe_tool_use(block: dict[str, Any], page_names: dict[str, int]) -> str
     return f"Using {name}"
 
 
-async def convert_pages(
-    image_paths: Sequence[Path],
+async def run_cli(
+    prompt: str,
     *,
     workdir: Path,
     model: str | None = None,
-) -> AsyncIterator[ProgressEvent | dict[str, Any]]:
-    """Run one conversion, yielding ProgressEvents then the final payload dict.
+    read_dir: Path | None = None,
+    page_names: dict[str, int] | None = None,
+) -> AsyncIterator[ProgressEvent | str]:
+    """Run one `claude -p` call, yielding ProgressEvents then the result text.
 
-    The final item yielded is the normalized payload. Errors are raised as
-    ConversionError with a message meant for the UI.
+    `read_dir` grants the Read tool access to a directory, which is what lets
+    Claude look at page images. A prompt that carries its own content - the
+    exercise generator, for instance - passes no directory and so runs with no
+    tools at all, which is both cheaper and tighter.
+
+    Errors are raised as ConversionError with a message meant for the UI.
     """
-    if not image_paths:
-        raise ConversionError("No page images were provided.")
-
     model = model or config.DEFAULT_MODEL
-    prompt = build_prompt(image_paths)
-    page_names: dict[str, int] = {}
-    for i, path in enumerate(image_paths, start=1):
-        page_names[str(path)] = i
-        page_names[path.name] = i
+    page_names = page_names or {}
 
     cmd = [
         config.CLAUDE_BIN,
@@ -404,13 +417,11 @@ async def convert_pages(
         "--output-format",
         "stream-json",
         "--verbose",
-        "--allowedTools",
-        "Read",
-        "--add-dir",
-        str(workdir),
         "--model",
         model,
     ]
+    if read_dir is not None:
+        cmd += ["--allowedTools", "Read", "--add-dir", str(read_dir)]
 
     yield ProgressEvent("status", f"Starting Claude Code ({model})...")
 
@@ -530,8 +541,72 @@ async def convert_pages(
             detail=stderr_tail or "(no stderr output)",
         )
 
+    yield result_text
+
+
+async def convert_pages(
+    image_paths: Sequence[Path],
+    *,
+    workdir: Path,
+    model: str | None = None,
+) -> AsyncIterator[ProgressEvent | dict[str, Any]]:
+    """Convert page images to a note, yielding progress then the payload dict."""
+    if not image_paths:
+        raise ConversionError("No page images were provided.")
+
+    page_names: dict[str, int] = {}
+    for index, path in enumerate(image_paths, start=1):
+        page_names[str(path)] = index
+        page_names[path.name] = index
+
+    result_text = ""
+    async for item in run_cli(
+        build_prompt(image_paths),
+        workdir=workdir,
+        model=model,
+        read_dir=workdir,
+        page_names=page_names,
+    ):
+        if isinstance(item, ProgressEvent):
+            yield item
+        else:
+            result_text = item
+
     yield ProgressEvent("status", "Parsing Claude's reply...")
-    payload = normalize_payload(
+    yield normalize_payload(
         parse_model_json(result_text), page_count=len(image_paths)
     )
-    yield payload
+
+
+async def generate_exercises(
+    markdown: str, *, workdir: Path, model: str | None = None
+) -> list[str]:
+    """Write practice exercises for a note that has already been transcribed.
+
+    The note's own text is the only input needed, so this never re-reads the
+    page images - which is what makes it far cheaper than a conversion.
+    """
+    body = (markdown or "").strip()
+    if not body:
+        raise ConversionError("There is no note content to build exercises from.")
+
+    result_text = ""
+    async for item in run_cli(
+        EXERCISES_TEMPLATE.format(note=body), workdir=workdir, model=model
+    ):
+        if not isinstance(item, ProgressEvent):
+            result_text = item
+
+    parsed = parse_model_json(result_text)
+    exercises = [
+        item.strip()
+        for item in (parsed.get("exercises") or [])
+        if isinstance(item, str) and item.strip()
+    ]
+    if not exercises:
+        raise ConversionError(
+            "Claude did not return any exercises for this note. Try again, or "
+            "check that the note has enough content to build questions from.",
+            detail=result_text[:800],
+        )
+    return exercises

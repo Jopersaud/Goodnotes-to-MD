@@ -200,8 +200,6 @@ def assemble_markdown(
         if extras:
             body = (body + "\n\n" + "\n\n".join(extras)).strip()
 
-    exercises = [ex.strip() for ex in payload.get("exercises") or [] if ex.strip()]
-
     parts = [
         build_front_matter(
             title=final_title,
@@ -219,16 +217,38 @@ def assemble_markdown(
         "## Notes",
         "",
         body or "_No content was transcribed from these pages._",
-        "",
-        "## Practice Exercises",
-        "",
     ]
-    if exercises:
-        parts.extend(f"{i}. {ex}" for i, ex in enumerate(exercises, start=1))
-    else:
-        parts.append("_No exercises were generated for this note._")
 
     return "\n".join(parts).rstrip() + "\n"
+
+
+EXERCISES_HEADING = "## Practice Exercises"
+_EXERCISES_SECTION_RE = re.compile(
+    r"\n*^## +Practice Exercises[ \t]*$.*?(?=^## |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def set_exercises(markdown: str, exercises: list[str]) -> str:
+    """Add or replace the Practice Exercises section at the end of a note.
+
+    Exercises are generated on demand rather than during conversion, so this
+    has to be idempotent: asking twice replaces the section instead of stacking
+    a second one underneath.
+    """
+    cleaned = [item.strip() for item in exercises if item and item.strip()]
+    body = _EXERCISES_SECTION_RE.sub("\n", markdown).rstrip()
+    if not cleaned:
+        return body + "\n"
+
+    numbered = "\n".join(
+        f"{index}. {item}" for index, item in enumerate(cleaned, start=1)
+    )
+    return f"{body}\n\n{EXERCISES_HEADING}\n\n{numbered}\n"
+
+
+def has_exercises(markdown: str) -> bool:
+    return bool(_EXERCISES_SECTION_RE.search(markdown or ""))
 
 
 def retarget_asset_links(markdown: str, slug: str) -> str:
