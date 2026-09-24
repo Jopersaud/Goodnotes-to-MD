@@ -362,6 +362,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   vertical-align: top;
 }
 .markdown th { background: var(--panel); font-weight: 600; }
+/* Math. KaTeX sizes in em, so anchor it to the surrounding text. */
+.markdown .katex { font-size: 1.05em; }
+.markdown .math-display {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown .katex-display { margin: 0; }
+.markdown .math-failed {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
 .markdown .unclear {
   background: var(--accent-soft);
   border-bottom: 1px dotted var(--accent);
