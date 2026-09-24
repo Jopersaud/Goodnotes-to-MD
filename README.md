@@ -237,6 +237,18 @@ with a prose description directly below. Text-only pages contribute their
 transcription and no image, though every uploaded page is still copied into
 `assets/<slug>/` as source material.
 
+## Planned
+
+Specs for work that is designed but not built:
+
+- [`docs/ipad-access.md`](docs/ipad-access.md) — reaching the app from an iPad
+  over Tailscale, and the password gate and touch reordering that need to exist
+  first. Explains why the converter cannot run on Supabase or similar.
+- [`docs/review-pass.md`](docs/review-pass.md) — an opt-in second pass that
+  re-reads the pages against the generated note and reports transcription and
+  consistency errors, with the free local LaTeX and structure checks that should
+  run before spending anything.
+
 ## Notes on behaviour
 
 - **Duplicate titles** get a `-2`, `-3` suffix on the slug and filename; nothing
