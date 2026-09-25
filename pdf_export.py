@@ -33,8 +33,17 @@ def available() -> bool:
     This only checks that Playwright is importable - whether a Chromium build
     is actually present shows up when a render is attempted, and is reported
     with the same install hint.
+
+    `find_spec` on a dotted name imports the parent package first and raises
+    if it is missing, so a plain `find_spec(...) is not None` would blow up on
+    exactly the machines this is meant to detect. Everything is caught: this
+    answers an optional-feature question and must never be the reason a
+    request fails.
     """
-    return importlib.util.find_spec("playwright.async_api") is not None
+    try:
+        return importlib.util.find_spec("playwright.async_api") is not None
+    except Exception:  # noqa: BLE001 - absence is the expected outcome here
+        return False
 
 
 async def render_note_pdf(base_url: str, slug: str) -> bytes:

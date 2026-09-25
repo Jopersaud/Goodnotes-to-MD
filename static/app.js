@@ -869,7 +869,23 @@
     try {
       state.config = await api('/api/config');
     } catch (error) {
-      state.config = { models: [{ id: 'sonnet', label: 'sonnet' }], default_model: 'sonnet' };
+      // A failed config call must not quietly narrow what can be uploaded:
+      // an incomplete fallback once made PDFs look unsupported, which reads
+      // as a file-type problem rather than a server error.
+      state.config = {
+        models: [{ id: 'sonnet', label: 'sonnet' }],
+        default_model: 'sonnet',
+        allowed_suffixes: ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif'],
+        page_warn_threshold: 15,
+        pdf_export: false,
+        env_notices: [],
+      };
+      banner(
+        $('convert-error'),
+        'The server could not report its configuration, so some settings fell back to defaults.',
+        String(error.message || error) + '\n\nCheck the terminal running the '
+          + 'server for the actual error; conversions may still work.'
+      );
     }
 
     const select = $('model');

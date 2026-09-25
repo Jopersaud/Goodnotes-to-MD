@@ -149,8 +149,10 @@ Two ways to get a PDF, both from the **Library** tab:
   pip install playwright && playwright install chromium
   ```
 
-  Without it the buttons stay hidden and printing still works. If Playwright
-  cannot find a browser, point `GNMD_CHROMIUM_PATH` at one.
+  Without it the buttons stay hidden and printing still works, and PDF *input*
+  is unaffected - that uses pypdfium2, which is a required dependency. If
+  Playwright is installed but cannot find a browser, point
+  `GNMD_CHROMIUM_PATH` at one.
 
 Both routes render the same `/print` page, so the PDF matches the preview —
 typeset maths, embedded diagrams, captions kept with their images, and page
