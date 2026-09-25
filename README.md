@@ -163,6 +163,24 @@ by hand.
 HEIC is not accepted — Claude's Read tool doesn't handle it. Export as PDF, PNG,
 or JPEG instead.
 
+## Token use
+
+Every conversion and exercise run draws on the same weekly and session
+allowance as interactive Claude Code and claude.ai, so the app shows what each
+call actually used. The Claude Code CLI reports this in its result envelope;
+the app reads it, displays it, and appends one line per call to
+`usage.jsonl` (git-ignored).
+
+- The preview shows a breakdown for the conversion you just ran.
+- The **Library** tab totals today, the last seven days, and all time, with the
+  most recent calls listed underneath.
+
+The four counts are shown separately rather than summed, because they are
+billed very differently — cache reads cost a fraction of fresh input, so a
+single total would be misleading. Any dollar figure is what the same tokens
+would cost at list API prices; on a subscription nothing is charged per token,
+so treat it as a relative measure.
+
 ## Configuration
 
 All optional, all environment variables:
@@ -184,6 +202,8 @@ All optional, all environment variables:
 | `GNMD_THUMB_EDGE` | `320` | Long edge of the page-strip thumbnails |
 | `GNMD_CHROMIUM_PATH` | *(auto)* | Chromium binary for one-click PDF, if Playwright can't find one |
 | `GNMD_PDF_TIMEOUT_MS` | `30000` | Per-note ceiling when rendering a PDF |
+| `GNMD_USAGE_LOG` | `./usage.jsonl` | Where the per-call token ledger is written |
+| `GNMD_USAGE_MAX_ENTRIES` | `5000` | Ledger lines kept before the oldest are dropped |
 
 To keep notes outside the repo entirely:
 
@@ -200,6 +220,7 @@ static/print.*   the printable sheet, shared by the print dialog and Chromium
 server.py        FastAPI: /api/pages, /api/convert (SSE), /api/exercises,
                  /api/notes CRUD, /print
 page_prep.py     uploads -> page images: PDF rasterising, thumbnails
+usage_log.py     append-only record of what each Claude call used
 pdf_export.py    optional one-click PDF via headless Chromium
 claude_client.py prompt construction, the `claude -p` subprocess, response parsing
 note_store.py    markdown assembly, slugs, front matter, files on disk

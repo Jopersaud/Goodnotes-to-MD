@@ -74,5 +74,11 @@ THUMB_EDGE_PX = int(os.environ.get("GNMD_THUMB_EDGE", "320"))
 CHROMIUM_PATH = os.environ.get("GNMD_CHROMIUM_PATH", "")
 PDF_TIMEOUT_MS = int(os.environ.get("GNMD_PDF_TIMEOUT_MS", "30000"))
 
+# Append-only record of what each Claude call used, so the UI can show spend.
+_usage_log = os.environ.get("GNMD_USAGE_LOG")
+USAGE_LOG = (
+    Path(_usage_log).expanduser().resolve() if _usage_log else BASE_DIR / "usage.jsonl"
+)
+
 # Upload sessions older than this (in hours) are cleaned up automatically.
 UPLOAD_TTL_HOURS = int(os.environ.get("GNMD_UPLOAD_TTL_HOURS", "24"))

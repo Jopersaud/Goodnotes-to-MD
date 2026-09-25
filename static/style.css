@@ -401,6 +401,94 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 3px 10px;
 }
 
+/* Token use ------------------------------------------------------------- */
+
+.usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.usage-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+.usage-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.usage-chip b { color: var(--text); font-weight: 600; font-size: 12px; }
+.usage-chip i { font-style: normal; }
+.usage-chip.muted { color: var(--muted); }
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.usage-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 13px;
+  background: var(--panel-2);
+}
+
+.usage-box-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.usage-box .usage { margin-top: 8px; }
+.usage-box .usage-chip { background: var(--panel); }
+
+.usage-cost { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+.usage-toggle {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 14px;
+  user-select: none;
+}
+
+.usage-toggle:hover { color: var(--text); }
+
+.usage-recent { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+
+.usage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-row:last-child { border-bottom: none; }
+.usage-row .usage-what { font-size: 12.5px; }
+.usage-row .usage-when { font-size: 11.5px; color: var(--muted); text-align: right; }
+.usage-row .usage { grid-column: 1 / -1; margin-top: 4px; }
+
+.usage-note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 16px 0 0;
+}
+
 .notes-list { display: flex; flex-direction: column; gap: 10px; }
 
 .note-row {

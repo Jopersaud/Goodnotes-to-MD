@@ -71,6 +71,8 @@
           <input id="out-date" type="date">
         </label>
       </div>
+      <div id="usage-line" class="usage" hidden></div>
+
       <div class="controls">
         <span id="result-summary" style="color:var(--muted);font-size:12.5px"></span>
         <span class="spacer"></span>
@@ -108,6 +110,23 @@
         Nothing here yet. Convert a note and save it.
       </div>
       <div id="notes-dir" class="pathline"></div>
+    </div>
+
+    <div id="usage-card" class="card" hidden>
+      <h2>Token use</h2>
+      <div id="usage-totals" class="usage-grid"></div>
+      <details id="usage-recent-wrap">
+        <summary class="usage-toggle">Recent calls</summary>
+        <div id="usage-recent" class="usage-recent"></div>
+      </details>
+      <p class="usage-note">
+        These calls draw on the same weekly and session allowance as
+        interactive Claude Code and claude.ai. Cache reads are billed far below
+        fresh input, so the totals are not comparable line for line. Any dollar
+        figure is what the same tokens would cost at list API prices &mdash; on
+        a subscription nothing is charged per token.
+      </p>
+      <div id="usage-path" class="pathline"></div>
     </div>
 
     <div id="library-detail" class="card" hidden>

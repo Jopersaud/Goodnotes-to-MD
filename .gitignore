@@ -20,3 +20,6 @@ venv/
 
 # Local export bundle, not part of the project.
 /goodnotes-md.zip
+
+# Usage ledger is local telemetry, not project content.
+/usage.jsonl

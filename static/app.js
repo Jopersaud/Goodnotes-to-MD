@@ -36,6 +36,54 @@
     show(el, true);
   }
 
+  function formatTokens(value) {
+    const n = Number(value) || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
+    return String(n);
+  }
+
+  // The four counts are billed very differently - cache reads at a fraction of
+  // fresh input - so they are shown separately rather than summed into one
+  // misleading number.
+  function usageParts(usage) {
+    if (!usage) return [];
+    return [
+      ['output', usage.output_tokens],
+      ['input', usage.input_tokens],
+      ['cache write', usage.cache_creation_tokens],
+      ['cache read', usage.cache_read_tokens],
+    ].filter(function (pair) { return Number(pair[1]) > 0; });
+  }
+
+  function renderUsageLine(el, usage, label) {
+    const parts = usageParts(usage);
+    if (!parts.length) { show(el, false); return; }
+    el.innerHTML = '';
+
+    if (label) {
+      const tag = document.createElement('span');
+      tag.className = 'usage-label';
+      tag.textContent = label;
+      el.appendChild(tag);
+    }
+    parts.forEach(function (pair) {
+      const chip = document.createElement('span');
+      chip.className = 'usage-chip';
+      chip.innerHTML = '<b></b> <i></i>';
+      chip.querySelector('b').textContent = formatTokens(pair[1]);
+      chip.querySelector('i').textContent = pair[0];
+      el.appendChild(chip);
+    });
+    if (usage.duration_ms) {
+      const chip = document.createElement('span');
+      chip.className = 'usage-chip muted';
+      chip.textContent = (usage.duration_ms / 1000).toFixed(1) + 's';
+      el.appendChild(chip);
+    }
+    show(el, true);
+  }
+
   function formatDate(value) {
     if (!value) return '';
     const parsed = new Date(value);
@@ -131,7 +179,7 @@
     show($('view-library'), !isConvert);
     $('tab-convert').classList.toggle('active', isConvert);
     $('tab-library').classList.toggle('active', !isConvert);
-    if (!isConvert) loadNotes();
+    if (!isConvert) { loadNotes(); loadUsage(); }
   }
 
   /* ------------------------------ pages -------------------------------- */
@@ -423,6 +471,7 @@
     if (!payload.date_guess) bits.push('no date in the note, using today');
     bits.push('via ' + payload.model);
     $('result-summary').textContent = bits.join(' · ');
+    renderUsageLine($('usage-line'), payload.usage, 'This conversion');
 
     show($('result'), true);
     renderPreview();
@@ -489,6 +538,7 @@
         });
         $('out-markdown').value = body.markdown;
         renderPreview();
+        renderUsageLine($('usage-line'), body.usage, 'Exercises');
       });
     } catch (error) {
       banner($('convert-error'), 'Could not write exercises.', String(error.message || error));
@@ -511,7 +561,15 @@
         state.openNote.markdown = body.markdown;
         $('note-editor').value = body.markdown;
         renderInto($('note-render'), body.markdown, resolveSavedImage);
-        banner($('note-status'), body.exercises.length + ' exercises added and saved.');
+        const used = usageParts(body.usage)
+          .map(function (pair) { return formatTokens(pair[1]) + ' ' + pair[0]; })
+          .join(', ');
+        banner(
+          $('note-status'),
+          body.exercises.length + ' exercises added and saved.',
+          used ? 'This call used ' + used + '.' : null
+        );
+        loadUsage();
       });
     } catch (error) {
       banner($('note-status'), 'Could not write exercises.', String(error.message || error));
@@ -543,6 +601,7 @@
       clearPages(false);              // saving already consumed the session
       show($('save-status'), true);   // lives outside the preview card
       loadNotes();
+      loadUsage();
     } catch (error) {
       banner($('convert-error'), 'Could not save this note.', String(error.message || error));
     } finally {
@@ -551,6 +610,85 @@
   }
 
   /* ------------------------------ library ------------------------------ */
+
+  async function loadUsage() {
+    let data = null;
+    try {
+      data = await api('/api/usage');
+    } catch (error) {
+      show($('usage-card'), false);
+      return;
+    }
+    const hasAny = data.all && data.all.calls > 0;
+    show($('usage-card'), hasAny);
+    if (!hasAny) return;
+
+    const grid = $('usage-totals');
+    grid.innerHTML = '';
+    [
+      ['Today', data.today],
+      ['Last 7 days', data.week],
+      ['All time', data.all],
+    ].forEach(function (pair) {
+      const box = document.createElement('div');
+      box.className = 'usage-box';
+
+      const head = document.createElement('div');
+      head.className = 'usage-box-head';
+      head.textContent = pair[0] + ' · ' + pair[1].calls
+        + (pair[1].calls === 1 ? ' call' : ' calls');
+      box.appendChild(head);
+
+      const line = document.createElement('div');
+      line.className = 'usage';
+      renderUsageLine(line, {
+        output_tokens: pair[1].output_tokens,
+        input_tokens: pair[1].input_tokens,
+        cache_creation_tokens: pair[1].cache_creation_tokens,
+        cache_read_tokens: pair[1].cache_read_tokens,
+      });
+      box.appendChild(line);
+
+      if (pair[1].cost_usd) {
+        const cost = document.createElement('div');
+        cost.className = 'usage-cost';
+        cost.textContent = '≈ $' + pair[1].cost_usd.toFixed(2) + ' at list API prices';
+        box.appendChild(cost);
+      }
+      grid.appendChild(box);
+    });
+
+    const recent = $('usage-recent');
+    recent.innerHTML = '';
+    (data.recent || []).forEach(function (entry) {
+      const row = document.createElement('div');
+      row.className = 'usage-row';
+
+      const what = document.createElement('span');
+      what.className = 'usage-what';
+      what.textContent = (entry.kind === 'convert' ? 'Convert' : 'Exercises')
+        + (entry.title ? ' · ' + entry.title : '')
+        + (entry.pages ? ' (' + entry.pages + 'p)' : '');
+      row.appendChild(what);
+
+      const when = document.createElement('span');
+      when.className = 'usage-when';
+      const at = new Date(entry.at);
+      when.textContent = isNaN(at.getTime())
+        ? ''
+        : at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      row.appendChild(when);
+
+      const line = document.createElement('span');
+      line.className = 'usage';
+      renderUsageLine(line, entry);
+      row.appendChild(line);
+
+      recent.appendChild(row);
+    });
+
+    $('usage-path').textContent = data.path ? 'Ledger: ' + data.path : '';
+  }
 
   async function loadNotes() {
     let notes = [];

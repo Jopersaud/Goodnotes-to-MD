@@ -325,6 +325,50 @@ class ProgressEvent:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class CallResult:
+    """What one `claude -p` call produced: the reply, and what it cost."""
+
+    text: str
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+def extract_usage(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Pull the token counts out of the CLI's result envelope.
+
+    The envelope's own shape shifts between CLI versions, so every field is
+    read defensively: a missing count becomes zero rather than an exception,
+    and the breakdown is still worth showing even if one number is absent.
+
+    `cost_usd` is what the same tokens would cost at list API prices. On a
+    subscription nothing is billed per token, so the UI must present it as a
+    reference figure, never as money owed.
+    """
+    usage = envelope.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+
+    def count(key: str) -> int:
+        value = usage.get(key)
+        return value if isinstance(value, int) else 0
+
+    models = envelope.get("modelUsage")
+    model_names = sorted(models) if isinstance(models, dict) else []
+    cost = envelope.get("total_cost_usd")
+    duration = envelope.get("duration_ms")
+
+    return {
+        "input_tokens": count("input_tokens"),
+        "output_tokens": count("output_tokens"),
+        "cache_creation_tokens": count("cache_creation_input_tokens"),
+        "cache_read_tokens": count("cache_read_input_tokens"),
+        "cost_usd": cost if isinstance(cost, (int, float)) else None,
+        "duration_ms": duration if isinstance(duration, int) else None,
+        "turns": envelope.get("num_turns") if isinstance(envelope.get("num_turns"), int) else None,
+        "models": model_names,
+    }
+
+
 # A single stream-json line can be a base64-inlined image worth several MB.
 # Lines above this size are dropped unparsed rather than blowing up json.loads.
 MAX_LINE_BYTES = 2 * 1024 * 1024
@@ -442,6 +486,7 @@ async def run_cli(
         ) from exc
 
     result_text: str | None = None
+    result_envelope: dict[str, Any] = {}
     envelope_error: str | None = None
     stderr_chunks: list[bytes] = []
     writing_chars = 0
@@ -500,6 +545,7 @@ async def run_cli(
                     yield ProgressEvent("warning", f"Usage limit notice: {note}")
 
             elif etype == "result":
+                result_envelope = event
                 if event.get("is_error") or event.get("subtype") != "success":
                     envelope_error = (
                         str(event.get("result") or "")
@@ -541,7 +587,7 @@ async def run_cli(
             detail=stderr_tail or "(no stderr output)",
         )
 
-    yield result_text
+    yield CallResult(text=result_text, usage=extract_usage(result_envelope))
 
 
 async def convert_pages(
@@ -559,7 +605,7 @@ async def convert_pages(
         page_names[str(path)] = index
         page_names[path.name] = index
 
-    result_text = ""
+    result = CallResult(text="")
     async for item in run_cli(
         build_prompt(image_paths),
         workdir=workdir,
@@ -570,17 +616,19 @@ async def convert_pages(
         if isinstance(item, ProgressEvent):
             yield item
         else:
-            result_text = item
+            result = item
 
     yield ProgressEvent("status", "Parsing Claude's reply...")
-    yield normalize_payload(
-        parse_model_json(result_text), page_count=len(image_paths)
+    payload = normalize_payload(
+        parse_model_json(result.text), page_count=len(image_paths)
     )
+    payload["usage"] = result.usage
+    yield payload
 
 
 async def generate_exercises(
     markdown: str, *, workdir: Path, model: str | None = None
-) -> list[str]:
+) -> dict[str, Any]:
     """Write practice exercises for a note that has already been transcribed.
 
     The note's own text is the only input needed, so this never re-reads the
@@ -590,14 +638,14 @@ async def generate_exercises(
     if not body:
         raise ConversionError("There is no note content to build exercises from.")
 
-    result_text = ""
+    result = CallResult(text="")
     async for item in run_cli(
         EXERCISES_TEMPLATE.format(note=body), workdir=workdir, model=model
     ):
         if not isinstance(item, ProgressEvent):
-            result_text = item
+            result = item
 
-    parsed = parse_model_json(result_text)
+    parsed = parse_model_json(result.text)
     exercises = [
         item.strip()
         for item in (parsed.get("exercises") or [])
@@ -607,6 +655,6 @@ async def generate_exercises(
         raise ConversionError(
             "Claude did not return any exercises for this note. Try again, or "
             "check that the note has enough content to build questions from.",
-            detail=result_text[:800],
+            detail=result.text[:800],
         )
-    return exercises
+    return {"exercises": exercises, "usage": result.usage}

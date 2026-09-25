@@ -36,6 +36,7 @@ import config
 import note_store
 import page_prep
 import pdf_export
+import usage_log
 from claude_client import ConversionError, ProgressEvent
 from page_prep import PagePrepError
 
@@ -247,6 +248,14 @@ async def convert(request: ConvertRequest) -> StreamingResponse:
             )
             return
 
+        usage_log.record(
+            "convert",
+            payload.get("usage") or {},
+            title=payload["title"],
+            pages=len(order),
+            model=chosen_model,
+        )
+
         slug = note_store.unique_slug(payload["title"])
         markdown = note_store.assemble_markdown(
             payload, slug=slug, page_files=page_files
@@ -265,6 +274,7 @@ async def convert(request: ConvertRequest) -> StreamingResponse:
                 "date_guess": payload["date_guess"],
                 "diagram_pages": [d["page"] for d in payload["diagrams"]],
                 "has_exercises": False,
+                "usage": payload.get("usage") or {},
                 "markdown": markdown,
                 "pages": [
                     {
@@ -378,10 +388,12 @@ class ExerciseRequest(BaseModel):
     model: str | None = None
 
 
-async def _exercises_for(markdown: str, model: str | None) -> list[str]:
+async def _exercises_for(
+    markdown: str, model: str | None, *, slug: str | None, title: str | None
+) -> dict[str, Any]:
     """Generate exercises from note text. Reads no images, so it is cheap."""
     try:
-        return await claude_client.generate_exercises(
+        result = await claude_client.generate_exercises(
             markdown, workdir=config.UPLOADS_DIR, model=model
         )
     except ConversionError as exc:
@@ -390,14 +402,26 @@ async def _exercises_for(markdown: str, model: str | None) -> list[str]:
             detail=f"{exc.message} {exc.detail}".strip(),
         ) from exc
 
+    usage_log.record(
+        "exercises",
+        result["usage"],
+        slug=slug,
+        title=title,
+        model=model or config.DEFAULT_MODEL,
+    )
+    return result
+
 
 @app.post("/api/exercises")
 async def make_exercises(request: ExerciseRequest) -> dict[str, Any]:
     """Exercises for a note that has not been saved yet."""
-    exercises = await _exercises_for(request.markdown, request.model)
+    result = await _exercises_for(
+        request.markdown, request.model, slug=None, title=None
+    )
     return {
-        "exercises": exercises,
-        "markdown": note_store.set_exercises(request.markdown, exercises),
+        "exercises": result["exercises"],
+        "usage": result["usage"],
+        "markdown": note_store.set_exercises(request.markdown, result["exercises"]),
     }
 
 
@@ -409,12 +433,21 @@ async def make_note_exercises(slug: str, request: ExerciseRequest) -> dict[str, 
     except note_store.NoteStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    exercises = await _exercises_for(info["markdown"], request.model)
-    markdown = note_store.set_exercises(info["markdown"], exercises)
+    result = await _exercises_for(
+        info["markdown"], request.model, slug=slug, title=info.get("title")
+    )
+    markdown = note_store.set_exercises(info["markdown"], result["exercises"])
     updated = note_store.update_note(slug, markdown)
     updated["markdown"] = markdown
-    updated["exercises"] = exercises
+    updated["exercises"] = result["exercises"]
+    updated["usage"] = result["usage"]
     return updated
+
+
+@app.get("/api/usage")
+def get_usage() -> dict[str, Any]:
+    usage_log.maybe_prune()
+    return usage_log.summary()
 
 
 @app.get("/api/notes/{slug}/pdf")
