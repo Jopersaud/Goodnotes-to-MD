@@ -19,6 +19,13 @@
   </nav>
 </header>
 
+<div id="stale-warning" class="banner warn" style="margin:18px 24px 0" hidden>
+  <strong>This tab is running an older cached copy of the app.</strong>
+  <pre>Maths will show as raw $...$ until you reload. Hard-refresh the page
+(Cmd-Shift-R on macOS, Ctrl-Shift-R elsewhere). If it persists, pull the
+latest code and restart the server.</pre>
+</div>
+
 <main>
 
   <!-- ------------------------------ Convert ------------------------------ -->
@@ -154,5 +161,21 @@
 <script src="/static/vendor/katex/katex.min.js"></script>
 <script src="/static/markdown.js"></script>
 <script src="/static/app.js"></script>
+<script>
+// Freshness probe. This lives in the page rather than in a script file
+// because the page is served no-cache, so it always runs current even when a
+// browser is holding an old markdown.js. Without it, a stale cache is
+// indistinguishable from a rendering bug: maths simply appears as raw $...$.
+(function () {
+  var ok = false;
+  try {
+    ok = !!(window.NoteMarkdown
+      && window.NoteMarkdown.render('$x^2$').html.indexOf('class="math') !== -1);
+  } catch (error) {
+    ok = false;
+  }
+  if (!ok) document.getElementById('stale-warning').hidden = false;
+})();
+</script>
 </body>
 </html>

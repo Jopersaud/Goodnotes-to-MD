@@ -509,12 +509,12 @@ async def export_all(request: Request) -> Response:
 @app.get("/print")
 def print_view() -> FileResponse:
     """Printable single-note sheet, used by the print dialog and by Chromium."""
-    return FileResponse(STATIC_DIR / "print.html")
+    return _page("print.html")
 
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return _page("index.html")
 
 
 @app.exception_handler(note_store.NoteStoreError)
@@ -522,6 +522,32 @@ def note_store_error_handler(_request: Any, exc: note_store.NoteStoreError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+class AppStatic(StaticFiles):
+    """Static files that never go stale after a code change.
+
+    The app's own JS and CSS are served `no-cache`, which still allows a 304
+    via ETag but forces the browser to revalidate every load. Without this a
+    cached `markdown.js` silently keeps running after an update, and the app
+    looks broken in a way that reads exactly like a rendering bug.
+
+    Vendored third-party files are content-stable, so they keep a long cache.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Response:
+        response = await super().get_response(path, scope)
+        if path.startswith("vendor/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+def _page(name: str) -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / name, headers={"Cache-Control": "no-cache"}
+    )
+
+
 # Saved screenshots, so `../assets/<slug>/pageN.png` links can be previewed.
 app.mount("/assets", StaticFiles(directory=config.ASSETS_DIR), name="assets")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", AppStatic(directory=STATIC_DIR), name="static")

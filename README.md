@@ -284,6 +284,17 @@ Specs for work that is designed but not built:
   consistency errors, with the free local LaTeX and structure checks that should
   run before spending anything.
 
+## After pulling an update
+
+The app's own HTML, JS and CSS are served `no-cache`, so a browser always
+revalidates them and a code change takes effect on the next load. Restart the
+server after pulling; the page does the rest.
+
+As a backstop, the page runs a one-line self-check on load and shows a warning
+if the `markdown.js` the browser is holding predates maths support. That case
+is otherwise indistinguishable from a rendering bug: equations simply appear as
+raw `$...$` while everything else looks fine.
+
 ## Notes on behaviour
 
 - **Duplicate titles** get a `-2`, `-3` suffix on the slug and filename; nothing
